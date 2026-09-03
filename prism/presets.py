@@ -30,89 +30,89 @@ class Preset:
 
 
 PRESETS = [
-    Preset("cabo_cross", "Cross Over", "Geometricos",
+    Preset("cabo_cross", "Cross Over", "Cabo",
            "Dois feixes diagonais atravessando o cabo em sentidos opostos e se "
            "cruzando no meio. O efeito que mais mostra a largura da fita.",
            ["#000000", "#ff2d55", "#ffffff", "#00d9ff", "#000000"],
            [L("cb_cross", {"speed": 0.5, "slant": 1.0}, name="Cross over")]),
 
-    Preset("cabo_paralelo", "Paralelo", "Geometricos",
+    Preset("cabo_paralelo", "Paralelo", "Cabo",
            "As laminas acendem uma depois da outra, atravessando a largura do "
            "cabo. Cada lamina com sua cor.",
            ["#ff0000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff"],
            [L("cb_parallel", {"speed": 0.35, "duty": 0.3}, name="Paralelo")]),
 
-    Preset("cabo_onda", "Onda no Cabo", "Geometricos",
+    Preset("cabo_onda", "Onda no Cabo", "Cabo",
            "Uma onda percorre o comprimento com cada lamina defasada: a crista "
            "atravessa o cabo na diagonal.",
            ["#03045e", "#0077b6", "#48cae4", "#caf0f8"],
            [L("cb_wave", {"speed": 0.4, "freq": 1.5, "lane_phase": 0.5},
               name="Onda")]),
 
-    Preset("cabo_ripple", "Ondulacao", "Geometricos",
+    Preset("cabo_ripple", "Ondulacao", "Cabo",
            "Aneis se expandindo de um ponto do cabo, atravessando laminas e "
            "comprimento ao mesmo tempo.",
            ["#000814", "#0055a4", "#8ae1ff", "#ffffff"],
            [L("cb_ripple", {"speed": 0.5, "freq": 3.0}, name="Ondulacao")]),
 
-    Preset("cabo_bullets", "Projeteis", "Geometricos",
+    Preset("cabo_bullets", "Projeteis", "Cabo",
            "Cada lamina dispara um ponto que corre ate o fim e fica acumulado, "
            "ate a fita encher. Depois esvazia.",
            ["#000000", "#3a86ff", "#00f5d4", "#ffbe0b"],
            [L("cb_bullets", {"speed": 0.9, "stack_time": 6.0},
               name="Projeteis")]),
 
-    Preset("cabo_chuva", "Chuva no Cabo", "Geometricos",
+    Preset("cabo_chuva", "Chuva no Cabo", "Cabo",
            "Gotas caem por laminas diferentes em tempos diferentes, deixando "
            "boa parte do cabo escura.",
            ["#000000", "#001d3d", "#00a6fb", "#caf0f8"],
            [L("cb_drizzle", {"speed": 0.8, "density": 0.5}, name="Chuva")]),
 
-    Preset("cabo_transfer", "Transferencia", "Geometricos",
+    Preset("cabo_transfer", "Transferencia", "Cabo",
            "A cor passa de uma lamina para a seguinte, como se escorresse pela "
            "largura do cabo.",
            ["#12043a", "#c22e63", "#ff6b35", "#ffc15e"],
            [L("cb_transfer", {"speed": 0.3}, name="Transferencia")]),
 
-    Preset("cabo_disputa", "Disputa", "Geometricos",
+    Preset("cabo_disputa", "Disputa", "Cabo",
            "Duas frentes correm das pontas para o centro e recuam, disputando "
            "o territorio do cabo.",
            ["#ff0040", "#ff0040", "#00d4ff", "#00d4ff"],
            [L("cb_contest", {"speed": 0.35}, name="Disputa")]),
 
-    Preset("cabo_lamina", "Lamina a Lamina", "Geometricos",
+    Preset("cabo_lamina", "Lamina a Lamina", "Cabo",
            "Uma lamina inteira acende por vez, correndo pela largura. Bem "
            "marcado, quase um contador.",
            ["#0d0221", "#7b2cbf", "#e0218a", "#00f5d4"],
            [L("cb_lane_chase", {"speed": 3.0, "lit": 1}, name="Lamina")]),
 
-    Preset("cabo_diagonal", "Diagonal", "Geometricos",
+    Preset("cabo_diagonal", "Diagonal", "Cabo",
            "Faixas inclinadas deslizando pelo cabo, com borda dura.",
            ["#2d00f7", "#8900f2", "#f20089", "#01c5c4"],
            [L("cb_diagonal", {"speed": 0.4, "bands": 2.0, "slant": 1.0},
               name="Diagonal")]),
 
-    Preset("cabo_twinkle", "Cintilar 2D", "Geometricos",
+    Preset("cabo_twinkle", "Cintilar 2D", "Cabo",
            "LEDs individuais acendem espalhados pela matriz do cabo, sem "
            "padrao de linha. Cada LED por si.",
            ["#000000", "#ff9ff3", "#48dbfb", "#1dd1a1"],
            [L("cb_twinkle2d", {"rate": 14.0, "density": 0.2},
               name="Cintilar 2D")]),
 
-    Preset("cabo_espiral", "Espiral", "Geometricos",
+    Preset("cabo_espiral", "Espiral", "Cabo",
            "A cor gira em torno do eixo do cabo enquanto avanca — parece uma "
            "helice percorrendo a fita.",
            ["#0d0887", "#b12a90", "#e16462", "#fca636"],
            [L("cb_spiral", {"speed": 0.5, "turns": 2.0}, name="Espiral")]),
 
-    Preset("cabo_espectro", "Espectro no Cabo", "Geometricos",
+    Preset("cabo_espectro", "Espectro no Cabo", "Cabo",
            "Cada lamina e uma faixa de frequencia e a altura acesa mostra a "
            "intensidade: um analisador de espectro de verdade.",
            ["#30123b", "#4145ab", "#1ddfa3", "#a4fc3b", "#fb8022"],
            [L("cb_spectrum2d", {"gain": 1.5}, name="Espectro 2D")],
            needs=("audio",)),
 
-    Preset("cabo_completo", "Cabo + Fans", "Geometricos",
+    Preset("cabo_completo", "Cabo + Fans", "Cabo",
            "Cross over 2D nas fitas de cabo e cometa girando nos fans — cada "
            "peca com o efeito que a forma dela pede.",
            ["#000000", "#ff2d55", "#a855f7", "#00d9ff"],
@@ -121,68 +121,68 @@ PRESETS = [
             L("cb_cross", {"speed": 0.5},
               blend="add", name="Cabo")]),
 
-    Preset("fita_ponto", "Ponto Fino", "Pontuais",
+    Preset("fita_ponto", "Ponto Fino", "Fitas Finas",
            "Poucos LEDs correndo pela fita, o resto apagado. Borda seca, sem "
            "degrade — o que realmente rende numa fita de cabo.",
            ["#000000", "#ff0040", "#000000", "#00d4ff", "#000000"],
            [L("px_chase", {"width": 2, "heads": 1, "speed": 0.6},
               name="Ponto fino")]),
 
-    Preset("fita_tracejado", "Tracejado", "Pontuais",
+    Preset("fita_tracejado", "Tracejado", "Fitas Finas",
            "Um LED aceso a cada quatro, deslizando. Marca as laminas da fita "
            "uma a uma.",
            ["#0d0221", "#e0218a", "#0d0221", "#00f5d4", "#0d0221"],
            [L("px_marching", {"spacing": 4, "width": 1, "speed": 0.4},
               name="Tracejado")]),
 
-    Preset("fita_cometa", "Cometa Fino", "Pontuais",
+    Preset("fita_cometa", "Cometa Fino", "Fitas Finas",
            "Cabeca de um LED com rastro curto que apaga em degraus, nao num "
            "degrade continuo.",
            ["#000000", "#003b5c", "#00a6fb", "#ffffff"],
            [L("px_comet", {"tail": 4, "speed": 0.7}, name="Cometa fino")]),
 
-    Preset("fita_codigo", "Codigo", "Pontuais",
+    Preset("fita_codigo", "Codigo", "Fitas Finas",
            "Pontos caindo como chuva de codigo: cabeca clara, rastro curto, "
            "muita fita apagada entre eles.",
            ["#000000", "#00461e", "#00ff6a", "#c8ffe0"],
            [L("px_matrix", {"speed": 0.9, "tail": 5, "rate": 1.6},
               name="Codigo")]),
 
-    Preset("fita_varredura", "Varredura Fina", "Pontuais",
+    Preset("fita_varredura", "Varredura Fina", "Fitas Finas",
            "Uma linha de um LED varrendo a fita de ponta a ponta, resto "
            "totalmente escuro.",
            ["#000000", "#000000", "#ffffff", "#000000"],
            [L("px_scan", {"width": 1, "tail": 3, "speed": 0.5},
               name="Varredura")]),
 
-    Preset("fita_barras", "Barras", "Pontuais",
+    Preset("fita_barras", "Barras", "Fitas Finas",
            "Blocos acesos e apagados deslizando. Marca bem as laminas.",
            ["#2d00f7", "#000000", "#f20089", "#000000", "#01c5c4"],
            [L("px_bars", {"on": 3, "off": 5, "speed": 0.35}, name="Barras")]),
 
-    Preset("fita_esparso", "Cintilar Esparso", "Pontuais",
+    Preset("fita_esparso", "Cintilar Esparso", "Fitas Finas",
            "Fita quase toda escura, com poucos LEDs vivos que trocam de lugar "
            "devagar. Discreto.",
            ["#000000", "#001d3d", "#8ae1ff", "#000000"],
            [L("px_twinkle_gap", {"lit": 3, "hz": 1.2}, name="Esparso")]),
 
-    Preset("fita_faisca", "Faisca Fina", "Pontuais",
+    Preset("fita_faisca", "Faisca Fina", "Fitas Finas",
            "LEDs isolados acendendo e apagando secamente, densidade baixa.",
            ["#000000", "#ff9ff3", "#000000", "#feca57", "#000000"],
            [L("px_sparkle", {"rate": 8.0, "density": 0.12}, name="Faisca")]),
 
-    Preset("fita_abertura", "Abertura", "Pontuais",
+    Preset("fita_abertura", "Abertura", "Fitas Finas",
            "Dois LEDs saem do centro da fita para as pontas e voltam.",
            ["#000000", "#ff006e", "#000000", "#3a86ff", "#000000"],
            [L("px_split", {"width": 1, "tail": 3, "speed": 0.5},
               name="Abertura")]),
 
-    Preset("fita_cruzado", "Pares Cruzados", "Pontuais",
+    Preset("fita_cruzado", "Pares Cruzados", "Fitas Finas",
            "Dois pontos correndo em sentidos opostos, cruzando no meio.",
            ["#000000", "#ff2d55", "#ffffff", "#00d9ff", "#000000"],
            [L("px_pairs", {"width": 2, "speed": 0.5}, name="Cruzado")]),
 
-    Preset("fita_espectro", "Espectro Fino", "Pontuais",
+    Preset("fita_espectro", "Espectro Fino", "Fitas Finas",
            "Cada LED da fita e uma faixa de frequencia, com corte seco: "
            "analisador de barras finas.",
            ["#30123b", "#4145ab", "#1ddfa3", "#a4fc3b", "#fb8022"],
@@ -190,14 +190,14 @@ PRESETS = [
               name="Espectro fino")],
            needs=("audio",)),
 
-    Preset("fita_medidor", "Medidor de Audio", "Pontuais",
+    Preset("fita_medidor", "Medidor de Audio", "Fitas Finas",
            "A fita vira um VU de LEDs individuais, com o topo destacado em "
            "branco.",
            ["#0000ff", "#00ff88", "#ffff00", "#ff0000", "#ffffff"],
            [L("px_audio_bars", {"gain": 1.3}, name="Medidor")],
            needs=("audio",)),
 
-    Preset("misto_fita_fan", "Fitas Finas + Fans Suaves", "Pontuais",
+    Preset("misto_fita_fan", "Fitas Finas + Fans Suaves", "Fitas Finas",
            "O melhor dos dois: pontos finos correndo nas fitas, e um gradiente "
            "suave girando nos fans — cada peca com o que rende nela.",
            ["#000000", "#00d4ff", "#a855f7", "#ff2d75"],
@@ -604,4 +604,8 @@ def catalog():
         if items:
             out.append({"category": cat, "presets": items,
                         "refined": sum(1 for i in items if i["refined"])})
+    resto = [p.to_json() for p in PRESETS if p.category not in CATEGORY_ORDER]
+    if resto:
+        out.append({"category": "Outros", "presets": resto,
+                    "refined": sum(1 for i in resto if i["refined"])})
     return out
