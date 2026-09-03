@@ -1,9 +1,20 @@
+"""Paletas de cor e conversao entre espacos.
+
+As paletas viram uma tabela de consulta interpolada uma vez e reusada,
+porque amostrar paleta e a operacao mais repetida do motor: acontece uma
+vez por LED por quadro, sessenta vezes por segundo.
+"""
+
 from __future__ import annotations
 
 import numpy as np
 
 
 def hsv_to_rgb(h, s, v):
+    """Converte HSV em RGB, vetorizado.
+
+    O matiz da a volta sozinho, entao pode passar de 1 ou vir negativo.
+    """
     h = np.asarray(h, dtype=np.float32) % 1.0
     s = np.clip(np.asarray(s, dtype=np.float32), 0.0, 1.0)
     v = np.clip(np.asarray(v, dtype=np.float32), 0.0, 1.0)
@@ -24,6 +35,7 @@ def hsv_to_rgb(h, s, v):
 
 
 def rgb_to_hsv(rgb):
+    """Converte RGB em HSV, devolvendo os tres canais separados."""
     rgb = np.asarray(rgb, dtype=np.float32)
     r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
     mx = np.max(rgb, axis=-1)
@@ -40,6 +52,7 @@ def rgb_to_hsv(rgb):
 
 
 def hex_to_rgb(s: str):
+    """Le uma cor hexadecimal, aceitando forma curta e sem cerquilha."""
     s = s.strip().lstrip("#")
     if len(s) == 3:
         s = "".join(c * 2 for c in s)
@@ -47,6 +60,7 @@ def hex_to_rgb(s: str):
 
 
 def rgb_to_hex(c) -> str:
+    """Escreve uma cor em hexadecimal, saturando o que passar da faixa."""
     return "#%02x%02x%02x" % tuple(int(round(max(0.0, min(1.0, v)) * 255)) for v in c)
 
 
@@ -97,6 +111,11 @@ def _stops_to_lut(stops: tuple) -> np.ndarray:
 
 
 def get_lut(palette) -> np.ndarray:
+    """Devolve a tabela de consulta de uma paleta, montando na primeira vez.
+
+    Aceita nome do catalogo ou lista de paradas. Nome desconhecido cai no
+    arco-iris em vez de estourar.
+    """
     if isinstance(palette, str):
         stops = tuple(PALETTES.get(palette, PALETTES["rainbow"]))
     else:
@@ -109,6 +128,11 @@ def get_lut(palette) -> np.ndarray:
 
 
 def sample(palette, t) -> np.ndarray:
+    """Amostra a paleta ciclicamente, dando a volta fora de 0 a 1.
+
+    E o que se quer em efeito que corre sem parar, onde a cor precisa emendar
+    do fim para o comeco sem costura visivel.
+    """
     lut = get_lut(palette)
     idx = (np.asarray(t, dtype=np.float32) % 1.0) * (_LUT_SIZE - 1)
     i0 = idx.astype(np.int32)
@@ -118,6 +142,11 @@ def sample(palette, t) -> np.ndarray:
 
 
 def sample_clamped(palette, t) -> np.ndarray:
+    """Amostra a paleta grudando nas pontas fora de 0 a 1.
+
+    E o que se quer quando a posicao representa uma medida, como temperatura
+    ou nivel de audio, e passar do teto deve manter a cor do teto.
+    """
     lut = get_lut(palette)
     idx = np.clip(np.asarray(t, dtype=np.float32), 0.0, 1.0) * (_LUT_SIZE - 1)
     i0 = np.floor(idx).astype(np.int32)
@@ -127,5 +156,6 @@ def sample_clamped(palette, t) -> np.ndarray:
 
 
 def palette_preview(name: str, n: int = 24) -> list[str]:
+    """Devolve n cores em hexadecimal, para a interface desenhar a amostra."""
     cols = sample_clamped(name, np.linspace(0.0, 1.0, n))
     return [rgb_to_hex(c) for c in cols]

@@ -1,3 +1,17 @@
+"""Mapa espacial dos LEDs do gabinete.
+
+O motor do Prism trata iluminacao como imagem, nao como lista de canais.
+Cada LED vira um ponto (x, y) no quadrado unitario e todo efeito e uma
+funcao f(x, y, t) avaliada de uma vez em numpy. Isso e o que permite uma
+onda atravessar o gabinete inteiro passando pelos fans, pelas fitas e
+pela memoria como se fossem um so display.
+
+Alem das coordenadas do gabinete, o canvas deriva coordenadas locais por
+peca: `piece01` ao longo de cada peca, `piece_u` e `piece_v` para as
+fitas de cabo que tem varias lanes lado a lado, e `piece_pos` inteiro
+para os efeitos que precisam acender um LED exato sem borrar no vizinho.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -7,6 +21,12 @@ import numpy as np
 
 
 def device_key(dev) -> str:
+    """Identidade estavel de um dispositivo, para casar com a configuracao salva.
+
+    O indice que o OpenRGB da muda conforme a ordem de deteccao, entao a
+    chave usa nome mais um hash curto do serial ou da porta. O serial vai
+    picotado porque a configuracao e gravada em disco.
+    """
     tail = dev.serial.strip() if dev.serial.strip() else dev.location
     if tail:
         tail = hashlib.sha1(tail.encode("utf-8", "replace")).hexdigest()[:8]
@@ -14,11 +34,13 @@ def device_key(dev) -> str:
 
 
 def shape_point(n: int, g: dict) -> np.ndarray:
+    """Empilha todos os LEDs num ponto so, para zona de LED unico."""
     x, y = float(g.get("x", 0.5)), float(g.get("y", 0.5))
     return np.tile(np.array([[x, y]], dtype=np.float32), (n, 1))
 
 
 def shape_line(n: int, g: dict) -> np.ndarray:
+    """Distribui os LEDs por igual num segmento de reta."""
     x1, y1 = float(g.get("x1", 0.1)), float(g.get("y1", 0.5))
     x2, y2 = float(g.get("x2", 0.9)), float(g.get("y2", 0.5))
     if n == 1:
@@ -28,6 +50,10 @@ def shape_line(n: int, g: dict) -> np.ndarray:
 
 
 def shape_ring(n: int, g: dict) -> np.ndarray:
+    """Distribui os LEDs num arco, que e o formato de um fan.
+
+    Quando o arco fecha os 360 graus, o ultimo ponto nao repete o primeiro.
+    """
     cx, cy = float(g.get("cx", 0.5)), float(g.get("cy", 0.5))
     rad = float(g.get("radius", 0.12))
     a0 = math.radians(float(g.get("start_deg", 0.0)))
@@ -41,6 +67,7 @@ def shape_ring(n: int, g: dict) -> np.ndarray:
 
 
 def shape_grid(n: int, g: dict) -> np.ndarray:
+    """Distribui os LEDs numa matriz, preenchendo linha por linha."""
     x, y = float(g.get("x", 0.1)), float(g.get("y", 0.1))
     w, h = float(g.get("w", 0.8)), float(g.get("h", 0.3))
     cols = int(g.get("cols", 0)) or max(1, int(round(math.sqrt(max(n, 1)))))
@@ -55,6 +82,11 @@ def shape_grid(n: int, g: dict) -> np.ndarray:
 
 
 def shape_serpentine(n: int, g: dict) -> np.ndarray:
+    """Igual a matriz, mas invertendo o sentido das linhas impares.
+
+    E como a fita costuma ser dobrada em painel: ela sobe, desce e volta,
+    entao o indice do LED serpenteia em vez de voltar para a margem.
+    """
     grid = shape_grid(n, g)
     cols = int(g.get("cols", 0)) or max(1, int(round(math.sqrt(max(n, 1)))))
     order = np.arange(n)
@@ -76,6 +108,12 @@ def _grid_of(g: dict, n: int):
 
 
 def shape_cable(n: int, g: dict) -> np.ndarray:
+    """Distribui os LEDs numa fita larga de cabo, com varias lanes paralelas.
+
+    A fita que cobre o cabo de forca tem varias fileiras lado a lado, e e a
+    largura dela que da o efeito bonito. `lanes` diz quantas fileiras, e
+    `order` diz se o indice do LED corre ao longo do cabo ou atravessando.
+    """
     lanes = max(int(g.get("lanes", 12)), 1)
     x1, y1 = float(g.get("x1", 0.15)), float(g.get("y1", 0.40))
     x2, y2 = float(g.get("x2", 0.85)), float(g.get("y2", 0.40))
@@ -104,6 +142,12 @@ def shape_cable(n: int, g: dict) -> np.ndarray:
 
 
 def shape_multi(n: int, g: dict) -> np.ndarray:
+    """Monta uma zona a partir de varias pecas em sequencia.
+
+    Serve para o header onde varios fans dividem o mesmo canal ARGB: cada
+    peca vira uma unidade propria para os efeitos que trabalham por peca.
+    O que sobrar de LED sem peca declarada vira uma linha no rodape.
+    """
     parts = g.get("parts") or []
     out = []
     used = 0
@@ -154,6 +198,13 @@ _AUTO_BANDS = {
 
 
 def auto_placement(dev, zone, slot: int, zi: int = 0, zn: int = 1) -> dict:
+    """Chuta um lugar no gabinete para uma zona ainda nao configurada.
+
+    A posicao sai do tipo do dispositivo, e `zi` com `zn` espalham as zonas
+    irmas em vez de empilhar todas no mesmo ponto. Sem esse espalhamento,
+    os seis fans de um mesmo header cairiam sobre a mesma coordenada e todo
+    efeito espacial viraria uma cor chapada.
+    """
     band = _AUTO_BANDS.get(dev.type_name)
     y = band[0] if band else min(0.05 + 0.08 * slot, 0.95)
     xc = band[1] if band else 0.5
@@ -183,6 +234,16 @@ def auto_placement(dev, zone, slot: int, zi: int = 0, zn: int = 1) -> dict:
 
 
 class Canvas:
+    """Posicao de cada LED de cada dispositivo, num quadro so.
+
+    Concatena os dispositivos numa lista continua de LEDs e deriva dela os
+    arrays que os efeitos consomem: `x` e `y` normalizados, `cx` e `cy`
+    centrados em zero, `radius`, `theta` e `angle01` polares, e as
+    coordenadas por peca.
+
+    A geometria de cada zona vem da configuracao salva. Faltando, cai no
+    `auto_placement`.
+    """
 
     def __init__(self, devices, config: dict | None = None, enabled=None):
         self.config = config or {}
@@ -326,6 +387,7 @@ class Canvas:
         self.piece_lanes = planes
 
     def to_json(self) -> dict:
+        """Descreve o mapa no formato que a interface desenha."""
         return {
             "led_count": self.n,
             "zones": self.zone_info,

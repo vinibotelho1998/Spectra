@@ -1,3 +1,16 @@
+"""O que um efeito enxerga na hora de pintar um quadro.
+
+O `RenderContext` junta as coordenadas do canvas, o relogio da animacao e
+as fontes externas: audio, sensores de hardware e captura de tela. Cada
+fonte carrega o proprio `enabled`, entao um efeito reativo continua
+rodando quando a fonte esta fora, so que sobre valores parados, em vez de
+quebrar.
+
+O gerador aleatorio vem semeado de proposito, para que a mesma cena
+renderize igual duas vezes e da para reproduzir um quadro na hora de
+investigar defeito.
+"""
+
 from __future__ import annotations
 
 import numpy as np
@@ -6,6 +19,12 @@ N_BANDS = 24
 
 
 class AudioState:
+    """Espectro e dinamica do audio que esta tocando na maquina.
+
+    `bands` traz o espectro ja em escala logaritmica e com ganho automatico,
+    `beat` traz a deteccao de ataque, e `centroid` diz se o som esta puxando
+    para grave ou agudo.
+    """
 
     def __init__(self, bands: int = N_BANDS):
         self.enabled = False
@@ -20,6 +39,7 @@ class AudioState:
         self.waveform = np.zeros(128, dtype=np.float32)
 
     def band_at(self, u):
+        """Amostra o espectro em 0 a 1, interpolando entre as bandas vizinhas."""
         u = np.clip(np.asarray(u, dtype=np.float32), 0.0, 1.0)
         idx = u * (len(self.bands) - 1)
         i0 = np.floor(idx).astype(np.int32)
@@ -29,6 +49,7 @@ class AudioState:
 
 
 class SensorState:
+    """Temperatura, carga e rotacao lidas do hardware."""
 
     def __init__(self):
         self.enabled = False
@@ -41,6 +62,7 @@ class SensorState:
         self.extra: dict[str, float] = {}
 
     def value(self, name: str) -> float:
+        """Le um sensor pelo nome, caindo em zero se ele nao existir."""
         return {
             "cpu_temp": self.cpu_temp, "gpu_temp": self.gpu_temp,
             "cpu_load": self.cpu_load, "gpu_load": self.gpu_load,
@@ -48,6 +70,10 @@ class SensorState:
         }.get(name, self.extra.get(name, 0.0))
 
     def normalized(self, name: str, lo: float, hi: float) -> float:
+        """Mapeia a leitura de um sensor para 0 a 1 dentro da faixa dada.
+
+        Faixa invertida ou degenerada devolve zero em vez de estourar.
+        """
         v = self.value(name)
         if hi <= lo:
             return 0.0
@@ -55,6 +81,7 @@ class SensorState:
 
 
 class ScreenState:
+    """Ultimo quadro capturado da tela, reduzido, com media e cor dominante."""
 
     def __init__(self, h: int = 36, w: int = 64):
         self.enabled = False
@@ -63,6 +90,11 @@ class ScreenState:
         self.dominant = np.zeros(3, dtype=np.float32)
 
     def sample(self, x, y) -> np.ndarray:
+        """Amostra o quadro capturado com interpolacao bilinear.
+
+        E o que faz o efeito de luz ambiente ficar suave: cada LED le a cor da
+        regiao da tela que corresponde a posicao dele no gabinete.
+        """
         img = self.image
         h, w = img.shape[:2]
         fx = np.clip(np.asarray(x, dtype=np.float32), 0.0, 1.0) * (w - 1)
@@ -79,6 +111,12 @@ class ScreenState:
 
 
 class RenderContext:
+    """Contexto de um quadro, entregue a cada efeito.
+
+    Repassa os arrays de coordenada do canvas como propriedade, para que o
+    efeito escreva `ctx.x` em vez de `ctx.canvas.x`, e carrega o tempo, o
+    passo desde o quadro anterior e as fontes externas.
+    """
 
     def __init__(self, canvas):
         self.canvas = canvas
@@ -175,8 +213,14 @@ class RenderContext:
         return self.canvas.piece_lanes
 
     def zeros(self):
+        """Um quadro preto, no formato que os efeitos devolvem."""
         return np.zeros((self.n, 3), dtype=np.float32)
 
     def rotated(self, angle_deg: float):
+        """Projeta as coordenadas num eixo girado, em graus.
+
+        E o que da o parametro de angulo para os efeitos direcionais, sem que
+        cada um precise refazer a trigonometria.
+        """
         a = np.radians(angle_deg, dtype=np.float32)
         return (self.x * np.cos(a) + self.y * np.sin(a)).astype(np.float32)

@@ -1,3 +1,11 @@
+"""Ruido coerente, base dos efeitos organicos.
+
+Ruido de valor em tres dimensoes, com a terceira usada como tempo: isso
+faz o padrao evoluir continuamente em vez de deslizar rigido pela tela.
+A tabela de permutacao e semeada fixa, para que o mesmo instante da mesma
+cena renderize sempre igual.
+"""
+
 from __future__ import annotations
 
 import numpy as np
@@ -14,6 +22,10 @@ def _fade(t):
 
 
 def value_noise3(x, y, z):
+    """Ruido de valor em 3D, interpolado com a curva suave de Perlin.
+
+    Devolve valores aproximadamente em 0 a 1, vetorizado sobre arrays.
+    """
     x = np.asarray(x, dtype=np.float32)
     y = np.asarray(y, dtype=np.float32)
     z = np.asarray(z, dtype=np.float32)
@@ -54,6 +66,11 @@ def value_noise3(x, y, z):
 
 def fbm3(x, y, z, octaves: int = 4, lacunarity: float = 2.0,
          gain: float = 0.5) -> np.ndarray:
+    """Soma varias oitavas de ruido, cada uma menor e mais fina que a anterior.
+
+    E o que da aparencia de nuvem e fumaca: uma oitava so fica lisa demais
+    para parecer natural.
+    """
     total = np.zeros(np.broadcast(x, y, z).shape, dtype=np.float32)
     amp = 1.0
     freq = 1.0
@@ -67,6 +84,11 @@ def fbm3(x, y, z, octaves: int = 4, lacunarity: float = 2.0,
 
 
 def turbulence3(x, y, z, octaves: int = 4) -> np.ndarray:
+    """Como o fbm, mas somando o valor absoluto de cada oitava.
+
+    O dobramento no zero cria vincos e filamentos, o desenho de chama e de
+    agua revolta.
+    """
     total = np.zeros(np.broadcast(x, y, z).shape, dtype=np.float32)
     amp = 1.0
     freq = 1.0
@@ -80,6 +102,11 @@ def turbulence3(x, y, z, octaves: int = 4) -> np.ndarray:
 
 
 def curl_offset(x, y, t, scale: float = 1.0, eps: float = 0.05):
+    """Deslocamento perpendicular ao gradiente do ruido, aproximado.
+
+    Campo assim nao tem fonte nem sumidouro, entao o que anda sobre ele gira
+    e se enrola sem acumular num ponto, que e o movimento de fluido.
+    """
     n1 = value_noise3((x + eps) * scale, y * scale, t)
     n2 = value_noise3((x - eps) * scale, y * scale, t)
     n3 = value_noise3(x * scale, (y + eps) * scale, t)

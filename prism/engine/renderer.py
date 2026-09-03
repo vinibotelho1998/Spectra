@@ -1,3 +1,16 @@
+"""Pilha de camadas, composicao e o laco que empurra quadro para o hardware.
+
+O renderizador roda numa thread propria a taxa configurada. A cada
+quadro ele avalia cada camada ligada, compoe uma sobre a outra pelo modo
+de blend, aplica brilho e gama e manda os bytes para o OpenRGB.
+
+Duas decisoes de robustez moram aqui. Efeito que levanta excecao e
+desligado e registrado em vez de derrubar a thread, porque perder o laco
+de render deixa a iluminacao travada no ultimo quadro. Ja perda de
+conexao levanta, marca `connection_lost` e para o laco, porque nesse
+caso insistir nao adianta e quem observa precisa saber para reconectar.
+"""
+
 from __future__ import annotations
 
 import threading
@@ -14,6 +27,13 @@ from .context import RenderContext
 
 
 class Layer:
+    """Uma camada da cena: um efeito com parametros, blend e alvo.
+
+    `targets` limita a camada a dispositivos ou zonas especificas, o que
+    permite montar cena com efeito diferente em cada peca. `state` e a
+    memoria do efeito entre quadros, zerada quando o canvas e remontado.
+    """
+
     def __init__(self, effect_id: str, params: dict | None = None,
                  blend_mode: str = "normal", opacity: float = 1.0,
                  enabled: bool = True, targets=None, name: str = "",
@@ -31,12 +51,23 @@ class Layer:
         self._mask_key = None
 
     def resolved_params(self) -> dict:
+        """Junta os parametros salvos sobre os padroes do efeito.
+
+        Parametro ausente ou nulo cai no padrao, para que cena antiga continue
+        abrindo depois de um efeito ganhar parametro novo.
+        """
         d = fx.get(self.effect_id)
         p = d.defaults() if d else {}
         p.update({k: v for k, v in self.params.items() if v is not None})
         return p
 
     def mask_for(self, canvas: Canvas):
+        """Mascara booleana dos LEDs que esta camada pode pintar.
+
+        Devolve None quando a camada vale para o gabinete inteiro, o que deixa o
+        caminho comum sem custo. O resultado fica em cache por canvas, porque
+        isso seria refeito sessenta vezes por segundo a toa.
+        """
         if not self.targets:
             return None
         key = (id(canvas), tuple(sorted(self.targets)))
@@ -55,6 +86,7 @@ class Layer:
         return m
 
     def to_json(self) -> dict:
+        """Descreve a camada para salvar em disco e mostrar na interface."""
         return {"id": self.id, "effect": self.effect_id, "params": self.params,
                 "blend": self.blend, "opacity": self.opacity,
                 "enabled": self.enabled, "targets": self.targets,
@@ -62,6 +94,7 @@ class Layer:
 
     @staticmethod
     def from_json(d: dict) -> "Layer":
+        """Remonta uma camada a partir do que foi salvo, com padroes tolerantes."""
         return Layer(d.get("effect", "static"), d.get("params"),
                      d.get("blend", "normal"), d.get("opacity", 1.0),
                      d.get("enabled", True), d.get("targets"),
@@ -69,6 +102,13 @@ class Layer:
 
 
 class Renderer:
+    """Compoe as camadas e mantem o hardware pintado.
+
+    Guarda a pilha de camadas, o canvas derivado dos dispositivos ligados e
+    as configuracoes de saida. O acesso e protegido por lock reentrante,
+    porque a interface mexe na cena enquanto a thread de render le.
+    """
+
     def __init__(self, client, devices, layout_config=None, settings=None):
         self.client = client
         self.all_devices = devices
@@ -99,6 +139,11 @@ class Renderer:
         self.rebuild()
 
     def rebuild(self):
+        """Remonta o canvas e o contexto a partir dos dispositivos atuais.
+
+        Zera a memoria das camadas, ja que o estado guardado tem o tamanho do
+        canvas antigo.
+        """
         with self._lock:
             self.canvas = Canvas(self.all_devices, self.layout_config,
                                  self.settings.get("enabled_devices"))
@@ -109,11 +154,19 @@ class Renderer:
                 l.state.clear()
 
     def set_devices(self, devices):
+        """Troca a lista de dispositivos e remonta o canvas."""
         with self._lock:
             self.all_devices = devices
             self.rebuild()
 
     def arm_direct(self, force: bool = False):
+        """Coloca cada dispositivo no modo de pintura por LED.
+
+        Por padrao pula quem ja esta no modo certo. Isso importa: mandar troca
+        de modo para um dispositivo que ja esta nele faz o controlador reaplicar
+        a configuracao e piscar visivelmente. Com `force` a troca vai de novo,
+        para retomar depois de outro programa ter mexido no hardware.
+        """
         for dev in self.canvas.devices:
             m = dev.direct_mode()
             if not force and m is not None and dev.active_mode == m.index:
@@ -126,25 +179,35 @@ class Renderer:
                 self.last_error = str(exc)
 
     def set_layers(self, layers):
+        """Troca a pilha de camadas inteira."""
         with self._lock:
             self.layers = list(layers)
 
     def add_layer(self, layer: Layer):
+        """Empilha uma camada nova por cima."""
         with self._lock:
             self.layers.append(layer)
             return layer
 
     def remove_layer(self, layer_id: str):
+        """Tira uma camada pelo id."""
         with self._lock:
             self.layers = [l for l in self.layers if l.id != layer_id]
 
     def get_layer(self, layer_id: str):
+        """Busca uma camada pelo id, devolvendo None se nao existir."""
         for l in self.layers:
             if l.id == layer_id:
                 return l
         return None
 
     def render_once(self, dt: float) -> np.ndarray:
+        """Avalia e compoe um quadro, sem mandar para o hardware.
+
+        Efeito que levantar excecao e desligado e o erro fica em `last_error`,
+        para que uma camada defeituosa nao derrube a cena inteira. Saida com
+        formato errado e descartada.
+        """
         ctx = self.ctx
         ctx.dt = dt
         ctx.frame += 1
@@ -177,6 +240,12 @@ class Renderer:
         return np.clip(out, 0.0, 1.0)
 
     def to_wire(self, frame: np.ndarray) -> np.ndarray:
+        """Converte o quadro para os bytes que o OpenRGB espera.
+
+        Aplica brilho e correcao de gama antes de discretizar em 8 bits. A gama
+        importa mais aqui do que em tela: LED responde de forma bem linear a
+        corrente, entao sem correcao a metade da escala parece clara demais.
+        """
         b = float(self.settings["brightness"])
         g = float(self.settings["gamma"])
         v = np.clip(frame * b, 0.0, 1.0)
@@ -187,6 +256,11 @@ class Renderer:
         return rgba
 
     def push(self, frame: np.ndarray):
+        """Manda o quadro para cada dispositivo, fatiado pelas faixas do canvas.
+
+        Deixa `OpenRGBError` subir, porque perda de conexao precisa parar o laco
+        em vez de virar quadro perdido em silencio.
+        """
         rgba = self.to_wire(frame)
         raw = rgba.tobytes()
         for dev_index, start, count in self.canvas.slices:
@@ -198,6 +272,7 @@ class Renderer:
                 raise
 
     def blank(self):
+        """Apaga tudo, engolindo erro de conexao por ser usado no encerramento."""
         if self.canvas is None or self.canvas.n == 0:
             return
         try:
@@ -206,6 +281,7 @@ class Renderer:
             pass
 
     def start(self):
+        """Sobe a thread de render, se ainda nao estiver rodando."""
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
@@ -214,6 +290,7 @@ class Renderer:
         self._thread.start()
 
     def stop(self):
+        """Pede parada da thread de render e espera ela sair."""
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=2.0)
@@ -258,10 +335,12 @@ class Renderer:
                 time.sleep(sleep)
 
     def scene_json(self) -> dict:
+        """Descreve a cena inteira, camadas e configuracoes, para salvar."""
         return {"layers": [l.to_json() for l in self.layers],
                 "settings": {k: v for k, v in self.settings.items()}}
 
     def load_scene(self, data: dict):
+        """Carrega uma cena salva por cima da atual."""
         with self._lock:
             self.layers = [Layer.from_json(d) for d in data.get("layers", [])]
             s = data.get("settings") or {}
