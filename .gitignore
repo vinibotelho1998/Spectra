@@ -1,0 +1,22 @@
+# ambiente Python
+.venv/
+__pycache__/
+*.pyc
+
+# dados do usuario (gerados em tempo de execucao, nunca no repo)
+config/
+
+# recursos de terceiros que o usuario baixa por conta propria (ver README)
+vendor/
+
+# saida de build
+build/
+dist/
+installer/output/
+
+# editores / SO
+.vs/
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store

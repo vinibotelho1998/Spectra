@@ -1,0 +1,11 @@
+numpy==2.5.2
+psutil==7.2.2
+pywebview==6.2.1
+pystray==0.19.5
+pillow==12.3.0
+
+# Windows-only, cada um opcional: sem ele a fonte correspondente
+# simplesmente fica indisponivel, sem quebrar o resto do app.
+pyaudiowpatch==0.2.12.8   # audio (loopback WASAPI) -> efeitos reativos a musica
+dxcam==0.3.0              # captura de tela (Desktop Duplication) -> Ambilight
+pythonnet==3.1.0          # ponte com LibreHardwareMonitor -> temperaturas
