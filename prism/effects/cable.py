@@ -117,9 +117,9 @@ def _cb_drizzle(ctx, p, st):
     lanes = np.maximum(ctx.piece_lanes, 1)
     if st.get("_n") != ctx.n:
         st["_n"] = ctx.n
-        st["off"] = np.random.random(ctx.n).astype(np.float32)
-        st["spd"] = (0.6 + np.random.random(ctx.n).astype(np.float32) * 0.8)
-        st["on"] = np.random.random(ctx.n).astype(np.float32)
+        st["off"] = ctx.rng.random(ctx.n).astype(np.float32)
+        st["spd"] = (0.6 + ctx.rng.random(ctx.n).astype(np.float32) * 0.8)
+        st["on"] = ctx.rng.random(ctx.n).astype(np.float32)
 
     u = 1.0 - ctx.piece_u if p["up"] else ctx.piece_u
     lvl = np.zeros(ctx.n, dtype=np.float32)
@@ -212,12 +212,12 @@ def _cb_twinkle2d(ctx, p, st):
     lvl = st.get("lvl")
     if lvl is None or len(lvl) != ctx.n:
         lvl = np.zeros(ctx.n, dtype=np.float32)
-        st["hue"] = np.random.random(ctx.n).astype(np.float32)
+        st["hue"] = ctx.rng.random(ctx.n).astype(np.float32)
     lvl = lvl * float(np.exp(-p["decay"] * ctx.dt))
-    born = np.random.random(ctx.n) < (p["rate"] * ctx.dt * p["density"])
+    born = ctx.rng.random(ctx.n) < (p["rate"] * ctx.dt * p["density"])
     if born.any():
         lvl[born] = 1.0
-        st["hue"][born] = np.random.random(int(born.sum())).astype(np.float32)
+        st["hue"][born] = ctx.rng.random(int(born.sum())).astype(np.float32)
     st["lvl"] = lvl
     tone = ctx.piece_v if p["by_lane"] else st["hue"]
     cols = pal.sample(p["palette"], tone + ctx.t * 0.05)

@@ -142,9 +142,9 @@ def _audio_ripple(ctx, p, st):
         i = int(np.argmax(st["age"]))
         if st["age"][i] > 0.12:
             st["age"][i] = 0.0
-            st["cx"][i] = np.random.random()
-            st["cy"][i] = np.random.random()
-            st["hue"][i] = np.random.random()
+            st["cx"][i] = ctx.rng.random()
+            st["cy"][i] = ctx.rng.random()
+            st["hue"][i] = ctx.rng.random()
     out = np.zeros((ctx.n, 3), dtype=np.float32)
     for i in range(k):
         age = st["age"][i]
@@ -191,10 +191,10 @@ def _audio_sparkle(ctx, p, st):
     lvl *= float(np.exp(-p["decay"] * ctx.dt))
     drive = ctx.audio.beat * p["gain"]
     if drive > 0.2:
-        born = np.random.random(ctx.n) < (p["density"] * drive)
+        born = ctx.rng.random(ctx.n) < (p["density"] * drive)
         if born.any():
             lvl[born] = np.minimum(1.0, drive)
-            st["hue"][born] = np.random.random(int(born.sum())).astype(np.float32)
+            st["hue"][born] = ctx.rng.random(int(born.sum())).astype(np.float32)
     st["lvl"] = lvl
     return pal.sample(p["palette"], st["hue"]) * lvl[:, None] * p["intensity"]
 

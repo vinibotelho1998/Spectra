@@ -119,7 +119,7 @@ def _fireflies(ctx, p, st):
         st["ph"] = r.random(k).astype(np.float32) * 6.28
         st["hue"] = r.random(k).astype(np.float32)
         st["ang"] = r.random(k).astype(np.float32) * 6.28
-    st["ang"] = st["ang"] + (np.random.random(k).astype(np.float32) - 0.5) * 2.0 * ctx.dt
+    st["ang"] = st["ang"] + (ctx.rng.random(k).astype(np.float32) - 0.5) * 2.0 * ctx.dt
     st["px"] = np.clip(st["px"] + np.cos(st["ang"]) * p["speed"] * ctx.dt, 0.0, 1.0)
     st["py"] = np.clip(st["py"] + np.sin(st["ang"]) * p["speed"] * ctx.dt, 0.0, 1.0)
     puls = 0.35 + 0.65 * (np.sin(ctx.t * p["blink"] * 6.28 + st["ph"]) * 0.5 + 0.5)
@@ -181,7 +181,7 @@ def _confetti(ctx, p, st):
         st["hue"] = np.zeros(k, dtype=np.float32)
     st["life"] = np.maximum(st["life"] - ctx.dt, 0.0)
     dead = np.flatnonzero(st["life"] <= 0.0)
-    n_new = int(min(len(dead), np.random.poisson(max(p["rate"] * ctx.dt, 0.0))))
+    n_new = int(min(len(dead), ctx.rng.poisson(max(p["rate"] * ctx.dt, 0.0))))
     if n_new:
         pick = dead[:n_new]
         r = st["rng"]
@@ -205,10 +205,10 @@ def _confetti(ctx, p, st):
          color("ambient", "Ambiente", "#050912"), INTENSITY()])
 def _lightning(ctx, p, st):
     lvl = float(st.get("lvl", 0.0)) * float(np.exp(-p["decay"] * ctx.dt))
-    if np.random.random() < p["rate"] * ctx.dt:
+    if ctx.rng.random() < p["rate"] * ctx.dt:
         lvl = 1.0
-        st["bx"] = float(np.random.random())
-        st["flick"] = float(np.random.random())
+        st["bx"] = float(ctx.rng.random())
+        st["flick"] = float(ctx.rng.random())
     st["lvl"] = lvl
     amb = np.array(pal.hex_to_rgb(p["ambient"]), dtype=np.float32)
     out = np.tile(amb, (ctx.n, 1))
@@ -274,7 +274,7 @@ def _fireworks(ctx, p, st):
         st["px"][live] += st["vx"][live] * ctx.dt
         st["py"][live] += st["vy"][live] * ctx.dt
 
-    if not live.any() and np.random.random() < p["rate"] * ctx.dt * 6.0:
+    if not live.any() and ctx.rng.random() < p["rate"] * ctx.dt * 6.0:
         r = st["rng"]
         cx = 0.2 + r.random() * 0.6
         cy = 0.2 + r.random() * 0.4

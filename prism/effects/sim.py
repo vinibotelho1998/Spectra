@@ -47,7 +47,7 @@ def _life(ctx, p, st):
     n = int(p["size"])
     if st.get("_n") != n:
         st["_n"] = n
-        st["g"] = (np.random.random((n, n)) < p["seed"]).astype(np.float32)
+        st["g"] = (ctx.rng.random((n, n)) < p["seed"]).astype(np.float32)
         st["heat"] = np.zeros((n, n), dtype=np.float32)
         st["stale"] = 0
     for _ in range(_tick(st, ctx, p["hz"])):
@@ -58,7 +58,7 @@ def _life(ctx, p, st):
         if np.array_equal(new, g) or new.sum() < n:
             st["stale"] += 1
             if st["stale"] > 2:
-                new = (np.random.random((n, n)) < p["seed"]).astype(np.float32)
+                new = (ctx.rng.random((n, n)) < p["seed"]).astype(np.float32)
                 st["stale"] = 0
         else:
             st["stale"] = 0
@@ -113,11 +113,11 @@ def _wave_eq(ctx, p, st):
         st["u"] = np.zeros((n, n), dtype=np.float32)
         st["v"] = np.zeros((n, n), dtype=np.float32)
     u, v = st["u"], st["v"]
-    hit = np.random.random() < p["rate"] * ctx.dt
+    hit = ctx.rng.random() < p["rate"] * ctx.dt
     if p["on_beat"] and ctx.audio.enabled and ctx.audio.beat > 0.75:
         hit = True
     if hit:
-        cy, cx = np.random.randint(3, n - 3, 2)
+        cy, cx = ctx.rng.integers(3, n - 3, 2)
         u[cy - 1:cy + 2, cx - 1:cx + 2] += p["force"]
     v = (v + _laplacian(u) * 0.22) * p["damping"]
     u = (u + v) * p["damping"]
@@ -190,7 +190,7 @@ def _automaton(ctx, p, st):
         st["g"] = np.zeros((n, n), dtype=np.float32)
         row = np.zeros(n, dtype=np.float32)
         if p["random_seed"]:
-            row = (np.random.random(n) < 0.3).astype(np.float32)
+            row = (ctx.rng.random(n) < 0.3).astype(np.float32)
         else:
             row[n // 2] = 1.0
         st["row"] = row
@@ -218,8 +218,8 @@ def _heat(ctx, p, st):
         st["_n"] = n
         st["h"] = np.zeros((n, n), dtype=np.float32)
     h = st["h"]
-    if np.random.random() < p["rate"] * ctx.dt:
-        cy, cx = np.random.randint(2, n - 2, 2)
+    if ctx.rng.random() < p["rate"] * ctx.dt:
+        cy, cx = ctx.rng.integers(2, n - 2, 2)
         h[cy - 1:cy + 2, cx - 1:cx + 2] = 1.0
     h = h + _laplacian(h) * p["diffuse"]
     h *= float(np.exp(-p["cool"] * ctx.dt))

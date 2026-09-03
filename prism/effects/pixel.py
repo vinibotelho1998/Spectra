@@ -92,7 +92,7 @@ def _px_sparkle(ctx, p, st):
     lvl = st.get("lvl")
     if lvl is None or len(lvl) != ctx.n:
         lvl = np.zeros(ctx.n, dtype=np.float32)
-        st["hue"] = np.random.random(ctx.n).astype(np.float32)
+        st["hue"] = ctx.rng.random(ctx.n).astype(np.float32)
     if p["fade"]:
         lvl = lvl * float(np.exp(-ctx.dt / max(p["hold"], 1e-3)))
     else:
@@ -102,10 +102,10 @@ def _px_sparkle(ctx, p, st):
         age += ctx.dt
         lvl = np.where(age < p["hold"], lvl, 0.0)
         st["age"] = age
-    born = np.random.random(ctx.n) < (p["rate"] * ctx.dt * p["density"])
+    born = ctx.rng.random(ctx.n) < (p["rate"] * ctx.dt * p["density"])
     if born.any():
         lvl[born] = 1.0
-        st["hue"][born] = np.random.random(int(born.sum())).astype(np.float32)
+        st["hue"][born] = ctx.rng.random(int(born.sum())).astype(np.float32)
         if not p["fade"]:
             st["age"][born] = 0.0
     st["lvl"] = lvl
@@ -133,10 +133,10 @@ def _px_matrix(ctx, p, st):
     livres = np.flatnonzero(st["pos"] > 400)
     if len(livres) == 0:
         livres = np.flatnonzero(st["pos"] < -900)
-    if len(livres) and np.random.random() < p["rate"] * ctx.dt:
+    if len(livres) and ctx.rng.random() < p["rate"] * ctx.dt:
         i = int(livres[0])
         st["pos"][i] = 0.0
-        st["piece"][i] = np.random.randint(0, npieces)
+        st["piece"][i] = ctx.rng.integers(0, npieces)
 
     lvl = np.zeros(ctx.n, dtype=np.float32)
     ishead = np.zeros(ctx.n, dtype=bool)
@@ -294,10 +294,10 @@ def _px_twinkle_gap(ctx, p, st):
             k = min(int(p["lit"]), count)
             if k <= 0:
                 continue
-            idx = np.random.choice(count, size=k, replace=False)
+            idx = ctx.rng.choice(count, size=k, replace=False)
             alvo[start + idx] = 1.0
         st["alvo"] = alvo
-        st["hue"] = np.random.random(ctx.n).astype(np.float32)
+        st["hue"] = ctx.rng.random(ctx.n).astype(np.float32)
     cur = st.get("cur")
     if cur is None or len(cur) != ctx.n:
         cur = np.zeros(ctx.n, dtype=np.float32)
