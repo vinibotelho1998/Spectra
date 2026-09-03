@@ -1,3 +1,10 @@
+"""Efeitos que reagem a algo de fora: audio, sensores ou tela.
+
+Cada um declara em `needs` a fonte que exige, para que a interface avise
+quando ela estiver indisponivel. Sem a fonte ativa eles continuam
+rodando sobre valores parados, em vez de quebrar.
+"""
+
 from __future__ import annotations
 
 import numpy as np

@@ -1,13 +1,26 @@
+"""Cenas prontas, cada uma com sua pilha de camadas ja ajustada.
+
+Um preset e o que a pessoa clica na tela inicial. Ele descreve as
+camadas, os parametros de cada uma e como elas se compoem, sem exigir
+que ninguem monte a cena do zero.
+
+`AGRESSIVOS` marca as cenas que piscam forte, que ficam atras do filtro
+de refinados por serem cansativas em uso prolongado.
+"""
+
 from __future__ import annotations
 
 
 def L(effect, params=None, blend="normal", opacity=1.0, name="", targets=None):
+    """Monta uma camada de preset, com efeito, parametros e composicao."""
     return {"effect": effect, "params": params or {}, "blend": blend,
             "opacity": opacity, "enabled": True, "name": name or effect,
             "targets": targets or []}
 
 
 class Preset:
+    """Uma cena pronta, com as camadas e os metadados da vitrine."""
+
     def __init__(self, id, name, category, description, swatch, layers,
                  needs=(), refined=True):
         self.id = id
@@ -20,12 +33,14 @@ class Preset:
         self.refined = refined
 
     def to_json(self):
+        """Descreve o preset para a grade da tela inicial."""
         return {"id": self.id, "name": self.name, "category": self.category,
                 "description": self.description, "swatch": self.swatch,
                 "needs": list(self.needs), "layer_count": len(self.layers),
                 "refined": self.refined}
 
     def scene(self):
+        """Devolve as camadas no formato que o renderizador carrega."""
         return {"layers": self.layers}
 
 
@@ -594,10 +609,16 @@ CATEGORY_ORDER = ["Cabo", "Fitas Finas", "Fluxo", "Essenciais", "Ambiente",
 
 
 def by_id(pid: str):
+    """Busca um preset pelo id, devolvendo None se nao existir."""
     return next((p for p in PRESETS if p.id == pid), None)
 
 
 def catalog():
+    """Agrupa os presets por categoria, na ordem em que a interface mostra.
+
+    Categoria fora da ordem conhecida cai num grupo Outros, para que nenhum
+    preset suma da tela sem aviso.
+    """
     out = []
     for cat in CATEGORY_ORDER:
         items = [p.to_json() for p in PRESETS if p.category == cat]

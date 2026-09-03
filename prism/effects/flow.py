@@ -1,3 +1,10 @@
+"""Efeitos de fluxo: algo que percorre o gabinete de ponta a ponta.
+
+Cometa, cascata, cobra e afins. Muitos trabalham por peca, defasando o
+inicio de cada fan e de cada fita para que o movimento pareca atravessar
+o gabinete em vez de acontecer igual em todo lugar ao mesmo tempo.
+"""
+
 from __future__ import annotations
 
 import numpy as np
@@ -8,6 +15,7 @@ from .base import (INTENSITY, SPEED, boolean, choice, color, colors, effect,
 
 
 def PHASE(default=0.0):
+    """Parametro que defasa o padrao entre as pecas, fan a fan."""
     return num("phase", "Defasagem entre pecas", default, 0.0, 1.0, 0.01)
 
 

@@ -1,3 +1,11 @@
+"""Efeitos para as fitas largas que cobrem cabo, tratadas como matriz.
+
+Essas fitas tem varias laminas paralelas ao longo do cabo, e e a largura
+delas que rende. Aqui os efeitos usam `piece_u` e `piece_v`, as
+coordenadas 2D da peca, para atravessar o cabo na diagonal, disputar
+territorio entre as pontas e desenhar espectro de audio de verdade.
+"""
+
 from __future__ import annotations
 
 import numpy as np
@@ -8,6 +16,7 @@ from .base import (INTENSITY, SCOPE, SPEED, apply_scope, boolean, color,
 
 
 def LANE_PHASE(default=0.5):
+    """Parametro que defasa o padrao entre as laminas da fita de cabo."""
     return num("lane_phase", "Defasagem entre laminas", default, -2.0, 2.0, 0.01)
 
 

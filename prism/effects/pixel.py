@@ -1,3 +1,10 @@
+"""Efeitos por LED, com borda dura e sem degrade.
+
+Trabalham sobre `piece_pos`, que e o indice inteiro do LED dentro da
+peca, em vez da posicao continua. E o que rende nas fitas finas: poucos
+LEDs acesos, a maioria apagada e nenhuma cor vazando para o vizinho.
+"""
+
 from __future__ import annotations
 
 import numpy as np

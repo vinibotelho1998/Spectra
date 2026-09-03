@@ -1,3 +1,10 @@
+"""Efeitos de onda: padrao periodico varrendo o gabinete.
+
+Todos derivam de uma fase que corre no tempo sobre um eixo escolhido,
+seja horizontal, vertical, radial ou angular, e mudam no formato da onda
+e no recorte das bordas.
+"""
+
 from __future__ import annotations
 
 import numpy as np

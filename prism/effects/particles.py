@@ -1,3 +1,11 @@
+"""Efeitos de particula, com estado que sobrevive entre quadros.
+
+Confete, vaga-lume, meteoro, fogos e raio. Cada um guarda posicao,
+velocidade e vida das particulas no dicionario de estado da camada, e
+avanca a simulacao por `ctx.dt`, para que a velocidade nao dependa da
+taxa de quadros.
+"""
+
 from __future__ import annotations
 
 import numpy as np

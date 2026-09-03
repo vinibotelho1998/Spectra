@@ -1,3 +1,10 @@
+"""Efeitos de simulacao rodando sobre uma grade propria.
+
+Jogo da vida, automato celular, difusao de calor, equacao de onda e
+cardume. A grade evolui a cada quadro e depois e amostrada nas posicoes
+dos LEDs, entao o padrao existe independente de onde o hardware esta.
+"""
+
 from __future__ import annotations
 
 import numpy as np

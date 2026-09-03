@@ -1,3 +1,9 @@
+"""Efeitos de base: cor chapada, respiracao, arco-iris e alternancia.
+
+Sao os que qualquer software de RGB faz. Estao aqui para servirem de
+fundo nas cenas de varias camadas e como ponto de partida de ajuste.
+"""
+
 from __future__ import annotations
 
 import numpy as np

@@ -1,3 +1,9 @@
+"""Efeitos de ruido coerente: fumaca, agua, plasma e nuvem.
+
+Usam ruido de valor com varias oitavas, o que da textura organica sem
+padrao repetido visivel, ao contrario das ondas periodicas.
+"""
+
 from __future__ import annotations
 
 import numpy as np
