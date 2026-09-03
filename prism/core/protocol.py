@@ -1,3 +1,17 @@
+"""Cliente do protocolo de rede do OpenRGB, falado direto em binario.
+
+O servidor SDK do OpenRGB escuta em TCP 6742 e troca pacotes com um
+cabecalho de 16 bytes seguido do corpo: magic "ORGB", indice do
+dispositivo, comando e tamanho, todos little endian.
+
+O formato mudou entre versoes do protocolo e o servidor nao anuncia qual
+layout usa para cada dispositivo. Por isso `OpenRGBClient.load_devices`
+tenta decodificar na versao negociada e vai baixando ate encaixar, e
+`_parse_device` exige que o blob termine exatamente no fim do payload
+para que um desalinhamento vire erro em vez de dispositivo silenciosamente
+torto.
+"""
+
 from __future__ import annotations
 
 import socket
@@ -45,50 +59,72 @@ ZONE_TYPE_NAMES = ["Single", "Linear", "Matrix"]
 
 
 class Reader:
+    """Cursor de leitura sobre um payload binario.
+
+    Cada metodo consome os bytes que le e avanca `off`, entao a ordem das
+    chamadas precisa espelhar o layout do pacote.
+    """
 
     def __init__(self, buf: bytes, offset: int = 0):
         self.buf = buf
         self.off = offset
 
     def u8(self) -> int:
+        """Le um byte sem sinal."""
         v = self.buf[self.off]
         self.off += 1
         return v
 
     def u16(self) -> int:
+        """Le um inteiro de 16 bits sem sinal."""
         v = struct.unpack_from("<H", self.buf, self.off)[0]
         self.off += 2
         return v
 
     def u32(self) -> int:
+        """Le um inteiro de 32 bits sem sinal."""
         v = struct.unpack_from("<I", self.buf, self.off)[0]
         self.off += 4
         return v
 
     def i32(self) -> int:
+        """Le um inteiro de 32 bits com sinal."""
         v = struct.unpack_from("<i", self.buf, self.off)[0]
         self.off += 4
         return v
 
     def string(self) -> str:
+        """Le uma string com prefixo de tamanho de 16 bits.
+
+        Corta no primeiro byte nulo e troca sequencia invalida por marcador, para
+        que nome de hardware estranho nao derrube a conexao.
+        """
         n = self.u16()
         raw = self.buf[self.off:self.off + n]
         self.off += n
         return raw.split(b"\x00", 1)[0].decode("utf-8", errors="replace")
 
     def color(self) -> tuple[int, int, int]:
+        """Le uma cor RGBA de 4 bytes e devolve so o RGB."""
         r, g, b, _a = struct.unpack_from("<BBBB", self.buf, self.off)
         self.off += 4
         return (r, g, b)
 
 
 def w_string(s: str) -> bytes:
+    """Serializa uma string no formato do protocolo, com tamanho e terminador."""
     raw = s.encode("utf-8") + b"\x00"
     return struct.pack("<H", len(raw)) + raw
 
 
 @dataclass
 class Mode:
+    """Um modo de operacao anunciado por um dispositivo.
+
+    Interessa sobretudo `per_led`: sem ele o dispositivo nao aceita cor por
+    LED e nenhum efeito do Prism tem como pintar nele.
+    """
+
     index: int
     name: str
     value: int
@@ -107,11 +143,14 @@ class Mode:
 
     @property
     def per_led(self) -> bool:
+        """Diz se o modo aceita uma cor por LED."""
         return bool(self.flags & MODE_FLAG_HAS_PER_LED_COLOR)
 
 
 @dataclass
 class Segment:
+    """Trecho nomeado dentro de uma zona, presente a partir da v4 do protocolo."""
+
     name: str
     type: int
     start_idx: int
@@ -120,6 +159,13 @@ class Segment:
 
 @dataclass
 class Zone:
+    """Um agrupamento de LEDs dentro de um dispositivo.
+
+    `leds_min` diferente de `leds_max` marca zona redimensionavel, que e o
+    caso dos headers ARGB, onde a contagem real precisa ser informada por
+    quem monta o gabinete.
+    """
+
     index: int
     name: str
     type: int
@@ -135,11 +181,18 @@ class Zone:
 
     @property
     def type_name(self) -> str:
+        """Nome legivel do tipo da zona."""
         return ZONE_TYPE_NAMES[self.type] if 0 <= self.type < 3 else "Unknown"
 
 
 @dataclass
 class Device:
+    """Um controlador de RGB visto pelo servidor OpenRGB.
+
+    Guarda o que veio do servidor sem interpretar: os modos anunciados, as
+    zonas com suas contagens e a lista de LEDs.
+    """
+
     index: int
     type: int
     name: str
@@ -156,15 +209,26 @@ class Device:
 
     @property
     def type_name(self) -> str:
+        """Nome legivel do tipo do dispositivo."""
         if 0 <= self.type < len(DEVICE_TYPE_NAMES):
             return DEVICE_TYPE_NAMES[self.type]
         return "Unknown"
 
     @property
     def led_count(self) -> int:
+        """Quantidade de LEDs, contada pela lista que o servidor mandou."""
         return len(self.leds)
 
     def direct_mode(self):
+        """Escolhe o modo que aceita pintura por LED sem gravar na flash.
+
+        Prefere os nomes conhecidos, Direct, Custom e Static, nessa ordem. Se
+        nenhum aparecer, aceita qualquer modo com cor por LED que nao tenha a
+        flag de gravacao automatica, porque escrever a 60 fps num modo que
+        persiste desgastaria a memoria do controlador.
+
+        Devolve None quando o dispositivo nao serve para efeito nenhum.
+        """
         for pref in ("direct", "custom", "static"):
             for m in self.modes:
                 if m.name.strip().lower() == pref and m.per_led:
@@ -175,6 +239,7 @@ class Device:
         return None
 
     def to_json(self) -> dict:
+        """Descreve o dispositivo no formato que a interface consome."""
         return {
             "index": self.index,
             "name": self.name,
@@ -209,10 +274,18 @@ class Device:
 
 
 class OpenRGBError(RuntimeError):
+    """Falha ao falar com o servidor OpenRGB."""
+
     pass
 
 
 class LayoutMismatch(OpenRGBError):
+    """O blob do dispositivo nao encaixou na versao de protocolo tentada.
+
+    Sinaliza para `OpenRGBClient.load_devices` que vale tentar uma versao
+    mais baixa.
+    """
+
     pass
 
 
@@ -319,6 +392,16 @@ def _parse_device(payload: bytes, index: int, proto: int) -> Device:
 
 
 class OpenRGBClient:
+    """Conexao com um servidor SDK do OpenRGB.
+
+    Nao e thread-safe por acidente e sim por construcao: o envio e protegido
+    por lock, porque a thread de render escreve cores a 60 fps enquanto a
+    thread da interface pode pedir troca de modo ou redimensionar zona.
+
+    Qualquer queda de conexao vira `OpenRGBError` e zera o socket, para que
+    a thread de render descubra a perda em vez de morrer calada com um
+    `OSError` cru.
+    """
 
     def __init__(self, host: str = "127.0.0.1", port: int = 6742,
                  name: str = "Prism"):
@@ -331,6 +414,7 @@ class OpenRGBClient:
         self._lock = threading.Lock()
 
     def connect(self, timeout: float = 4.0) -> None:
+        """Abre a conexao, se apresenta e negocia a versao do protocolo."""
         s = socket.create_connection((self.host, self.port), timeout=timeout)
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         s.settimeout(timeout)
@@ -339,6 +423,7 @@ class OpenRGBClient:
         self._negotiate()
 
     def close(self) -> None:
+        """Fecha a conexao, se houver alguma aberta."""
         if self.sock:
             try:
                 self.sock.close()
@@ -347,6 +432,7 @@ class OpenRGBClient:
 
     @property
     def connected(self) -> bool:
+        """Diz se existe socket aberto."""
         return self.sock is not None
 
     def _send(self, dev: int, cmd: int, data: bytes = b"") -> None:
@@ -403,10 +489,20 @@ class OpenRGBClient:
             self.protocol = 0
 
     def controller_count(self) -> int:
+        """Pergunta quantos dispositivos o servidor conhece."""
         resp = self._request(0, REQUEST_CONTROLLER_COUNT)
         return struct.unpack("<I", resp[:4])[0]
 
     def load_devices(self) -> list:
+        """Carrega todos os dispositivos, baixando a versao ate decodificar.
+
+        O servidor aceita a versao que o cliente pedir, mas o layout do blob de
+        cada dispositivo varia entre versoes e nem toda combinacao de servidor e
+        plugin respeita isso. Entao, a cada falha de decodificacao, desce um
+        degrau e tenta de novo, ate a v1.
+
+        Levanta `OpenRGBError` se nem a v1 servir.
+        """
         n = self.controller_count()
         while True:
             try:
@@ -425,6 +521,11 @@ class OpenRGBClient:
         return out
 
     def set_direct_mode(self, dev_index: int) -> bool:
+        """Coloca o dispositivo no modo de pintura por LED.
+
+        Devolve False quando o dispositivo nao tem modo utilizavel, o que e o
+        caso de teclado e mouse com firmware fechado.
+        """
         d = self.devices[dev_index]
         m = d.direct_mode()
         if m is None:
@@ -440,15 +541,22 @@ class OpenRGBClient:
         return True
 
     def update_leds(self, dev_index: int, colors: bytes, count: int) -> None:
+        """Manda o quadro inteiro de cores para um dispositivo."""
         body = struct.pack("<H", count) + colors
         data = struct.pack("<I", len(body) + 4) + body
         self._send(dev_index, UPDATE_LEDS, data)
 
     def update_zone_leds(self, dev_index: int, zone: int, colors: bytes,
                          count: int) -> None:
+        """Manda as cores de uma zona so."""
         body = struct.pack("<IH", zone, count) + colors
         data = struct.pack("<I", len(body) + 4) + body
         self._send(dev_index, UPDATE_ZONE_LEDS, data)
 
     def resize_zone(self, dev_index: int, zone: int, size: int) -> None:
+        """Informa quantos LEDs existem numa zona redimensionavel.
+
+        Header ARGB de 3 pinos e via unica: o controlador nao tem como contar o
+        que foi plugado nele, entao a contagem vem do assistente de descoberta.
+        """
         self._send(dev_index, RESIZEZONE, struct.pack("<ii", zone, size))

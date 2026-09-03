@@ -1,3 +1,16 @@
+"""Exclusividade sobre o hardware de iluminacao, no Windows.
+
+Controlador de RGB nao arbitra quem manda nele: ele obedece o ultimo
+comando que chegou. Com dois programas escrevendo ao mesmo tempo, o
+resultado e a luz piscando entre dois estados dezenas de vezes por
+segundo, sem erro em lugar nenhum.
+
+Por isso o Prism reivindica o hardware para si: um mutex nomeado garante
+instancia unica, e o `enforce` fecha os controladores concorrentes
+conhecidos. `PROTEGIDOS` blinda o proprio Prism e o servidor OpenRGB, que
+e a camada de que ele depende.
+"""
+
 from __future__ import annotations
 
 import ctypes
@@ -38,6 +51,12 @@ _mutex = None
 
 
 def acquire_single_instance(name: str = "Global\\DBXPrism_SingleInstance") -> bool:
+    """Tenta ficar como unica instancia, via mutex nomeado do Windows.
+
+    Devolve False quando ja existe outra instancia rodando. O mutex fica em
+    variavel de modulo de proposito: ele precisa viver enquanto o processo
+    viver, e o Windows o libera sozinho no encerramento, mesmo abrupto.
+    """
     global _mutex
     _mutex = kernel32.CreateMutexW(None, False, name)
     if not _mutex:
@@ -46,6 +65,11 @@ def acquire_single_instance(name: str = "Global\\DBXPrism_SingleInstance") -> bo
 
 
 def focus_existing_window(title: str = "DBX Prism") -> bool:
+    """Traz para frente a janela da instancia que ja estava aberta.
+
+    E o que faz o segundo clique no atalho parecer que abriu o programa, em
+    vez de nao fazer nada.
+    """
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     achou = []
 
@@ -89,6 +113,11 @@ def _listar_processos():
 
 
 def scan() -> list:
+    """Lista os processos de software de RGB concorrente que estao rodando.
+
+    Casa por nome exato e por prefixo, porque varios fabricantes sufixam o
+    executavel com versao.
+    """
     achados = []
     for pid, base, nome in _listar_processos():
         if base in PROTEGIDOS:
@@ -105,6 +134,12 @@ def scan() -> list:
 
 
 def enforce() -> dict:
+    """Fecha os concorrentes encontrados e relata o que caiu.
+
+    Devolve o que foi fechado e o que resistiu. Falha e comum e esperada:
+    varios desses programas rodam como servico e exigem privilegio maior do
+    que o Prism costuma ter.
+    """
     alvos = scan()
     fechados, falhou = [], []
     for a in alvos:
@@ -120,6 +155,12 @@ def enforce() -> dict:
 
 
 def minimize_openrgb() -> bool:
+    """Minimiza a janela do OpenRGB, se estiver aberta.
+
+    O OpenRGB e a camada que o Prism usa, entao nao se fecha. Mas a janela
+    dele em primeiro plano confunde, e alguns modos da interface dele
+    escrevem no hardware junto.
+    """
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     psapi_ok = []
 
