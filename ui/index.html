@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DBX Prism</title>
+<link rel="icon" href="/assets/prism.png">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+      <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#00e0ff"/><stop offset=".5" stop-color="#a855f7"/>
+        <stop offset="1" stop-color="#ff2d75"/></linearGradient></defs>
+      <path d="M16 2 L29 25 L3 25 Z" fill="none" stroke="url(#lg)" stroke-width="2.2"
+            stroke-linejoin="round"/>
+      <path d="M16 2 L16 25 M9 25 L16 13 L23 25" fill="none" stroke="url(#lg)"
+            stroke-width="1.1" opacity=".55"/>
+    </svg>
+    <span>DBX PRISM</span>
+  </div>
+
+  <div class="status" id="status">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">conectando…</span>
+    <span class="sep"></span>
+    <span class="metric"><b id="fpsVal">—</b> fps</span>
+    <span class="metric"><b id="ledVal">—</b> leds</span>
+  </div>
+
+  <div class="topctl">
+    <label class="bright">
+      <svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="12" r="4.5"/><g class="rays">
+        <path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M19.4 4.6l-2.1 2.1M6.7 17.3l-2.1 2.1"/>
+      </g></svg>
+      <input type="range" id="brightness" min="0" max="100" value="100">
+      <span id="brightVal">100%</span>
+    </label>
+    <button class="btn ghost" id="btnPause" title="Pausar render">Pausar</button>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="sidenav">
+    <button class="navbtn active" data-tab="effects">
+      <svg viewBox="0 0 24 24" class="ic"><path d="M12 2.5l2.6 6.2 6.7.5-5.1 4.4 1.6 6.6-5.8-3.5-5.8 3.5 1.6-6.6L2.7 9.2l6.7-.5z"/></svg>
+      <span>Efeitos</span></button>
+    <button class="navbtn" data-tab="scene">
+      <svg viewBox="0 0 24 24" class="ic"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+      <span>Avancado</span></button>
+    <button class="navbtn" data-tab="layout">
+      <svg viewBox="0 0 24 24" class="ic"><rect x="3" y="3" width="7" height="7" rx="1.5"/>
+        <rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>
+        <rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      <span>Layout</span></button>
+    <button class="navbtn" data-tab="devices">
+      <svg viewBox="0 0 24 24" class="ic"><rect x="3" y="5" width="18" height="14" rx="2"/>
+        <path d="M7 9h4M7 13h7"/></svg>
+      <span>Hardware</span></button>
+    <button class="navbtn" data-tab="sources">
+      <svg viewBox="0 0 24 24" class="ic"><path d="M4 14v-4M8 18V6M12 16V8M16 20V4M20 13v-2"/></svg>
+      <span>Fontes</span></button>
+    <button class="navbtn" data-tab="profiles">
+      <svg viewBox="0 0 24 24" class="ic"><path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/>
+        <path d="M14 4v5h5"/></svg>
+      <span>Perfis</span></button>
+  </nav>
+
+  <main class="content">
+
+    <!-- ========================== EFEITOS =========================== -->
+    <section class="tab active" id="tab-effects">
+      <div id="setupBanner"></div>
+
+      <div class="fx-layout">
+        <div class="panel fx-list-panel">
+          <div class="panel-head">
+            <h2>Efeitos prontos</h2>
+            <div class="head-actions">
+              <input type="search" id="presetSearch" placeholder="Buscar efeito...">
+            </div>
+          </div>
+          <div id="presetGrid"></div>
+        </div>
+
+        <div class="panel fx-side">
+          <div class="panel-head"><h2>Tocando agora</h2></div>
+          <div class="canvas-wrap mini">
+            <canvas id="preview2"></canvas>
+            <div class="canvas-empty" id="canvasEmpty2" hidden>
+              <p class="muted">Nenhum LED ativo ainda</p>
+            </div>
+          </div>
+          <div id="nowPlaying" class="now-playing">
+            <p class="muted center" style="padding:12px 0">Escolha um efeito.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ CENA ============================ -->
+    <section class="tab" id="tab-scene">
+      <div class="scene-grid">
+
+        <div class="panel preview-panel">
+          <div class="panel-head">
+            <h2>Pre-visualizacao</h2>
+            <div class="head-actions">
+              <button class="chip" id="btnGlow" data-on="1">Brilho</button>
+              <button class="chip" id="btnLabels">Rotulos</button>
+            </div>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="preview"></canvas>
+            <div class="canvas-empty" id="canvasEmpty" hidden>
+              <p>Nenhum LED ativo.</p>
+              <p class="muted">Configure os headers ARGB na aba Hardware.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel layers-panel">
+          <div class="panel-head">
+            <h2>Camadas</h2>
+            <button class="btn primary sm" id="btnAddLayer">+ Camada</button>
+          </div>
+          <ul class="layers" id="layerList"></ul>
+          <p class="hint">As camadas sao compostas de baixo para cima. Arraste para reordenar.</p>
+        </div>
+
+        <div class="panel params-panel">
+          <div class="panel-head">
+            <h2 id="paramsTitle">Parametros</h2>
+            <button class="btn ghost sm" id="btnChangeEffect" hidden>Trocar efeito</button>
+          </div>
+          <div id="paramsBody" class="params-body">
+            <p class="muted center">Selecione uma camada.</p>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =========================== LAYOUT =========================== -->
+    <section class="tab" id="tab-layout">
+      <div class="layout-grid">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Mapa fisico</h2>
+            <div class="head-actions">
+              <button class="btn ghost sm" id="btnResetLayout">Restaurar automatico</button>
+            </div>
+          </div>
+          <p class="hint">
+            Posicione cada zona onde ela fica de verdade no gabinete. Os efeitos
+            usam essas coordenadas, entao uma onda so atravessa o gabinete na
+            ordem certa se o mapa estiver certo. Arraste para mover; use as alcas
+            para girar e redimensionar.
+          </p>
+          <div class="canvas-wrap edit">
+            <canvas id="layoutCanvas"></canvas>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Zona selecionada</h2></div>
+          <div id="zoneEditor" class="params-body">
+            <p class="muted center">Clique numa zona no mapa.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================== HARDWARE ========================== -->
+    <section class="tab" id="tab-devices">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Dispositivos detectados</h2>
+          <button class="btn ghost sm" id="btnReconnect">Reconectar</button>
+        </div>
+        <div id="deviceList" class="device-list"></div>
+      </div>
+    </section>
+
+    <!-- =========================== FONTES =========================== -->
+    <section class="tab" id="tab-sources">
+      <div class="sources-grid" id="sourcesBody"></div>
+    </section>
+
+    <!-- =========================== PERFIS =========================== -->
+    <section class="tab" id="tab-profiles">
+      <div class="panel">
+        <div class="panel-head"><h2>Perfis</h2></div>
+        <div class="profile-save">
+          <input type="text" id="profileName" placeholder="Nome do perfil" maxlength="40">
+          <button class="btn primary" id="btnSaveProfile">Salvar cena atual</button>
+        </div>
+        <ul class="profile-list" id="profileList"></ul>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ====================== SELETOR DE EFEITOS ====================== -->
+<div class="modal" id="effectModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>Escolher efeito</h2>
+      <input type="search" id="effectSearch" placeholder="Buscar…" autocomplete="off">
+      <button class="btn ghost sm" id="btnCloseModal">Fechar</button>
+    </div>
+    <div class="modal-body" id="effectGrid"></div>
+  </div>
+</div>
+
+<!-- ====================== ASSISTENTE DE LEDS ====================== -->
+<div class="modal" id="probeModal" hidden>
+  <div class="modal-card probe-card">
+    <div class="modal-head">
+      <h2 id="probeTitle">Configurar LEDs</h2>
+      <div class="stepper" id="probeStepper"></div>
+      <button class="btn ghost sm" id="probeCancel">Sair</button>
+    </div>
+    <div class="modal-body" id="probeBody"></div>
+  </div>
+</div>
+
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/js/presets.js"></script>
+<script src="/js/probe.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>
