@@ -21,11 +21,11 @@ jobs:
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
           pip install pyinstaller
 
-      - name: Rodar o smoke test dos efeitos
-        run: python tools/smoke.py
+      - name: Rodar a suite de testes
+        run: python -m pytest
 
       - name: Congelar o app (PyInstaller)
         run: pyinstaller dbx-prism.spec --noconfirm
