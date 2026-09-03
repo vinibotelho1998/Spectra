@@ -134,6 +134,8 @@ def _fireflies(ctx, p, st):
          num("width", "Espessura", 0.06, 0.01, 0.3),
          num("angle", "Angulo", 35.0, 0.0, 360.0, 1.0, "graus"), INTENSITY()])
 def _meteor(ctx, p, st):
+    if ctx.n == 0:
+        return ctx.zeros()
     k = int(p["count"])
     if _respawn_state(st, "_k", k, 7777):
         r = st["rng"]

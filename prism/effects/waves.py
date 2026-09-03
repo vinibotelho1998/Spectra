@@ -22,6 +22,8 @@ def _rainbow_wave(ctx, p, st):
          SPEED(0.6), ANGLE(0.0), num("width", "Largura", 0.18, 0.02, 1.0),
          boolean("bounce", "Vai e volta", False), INTENSITY()])
 def _wave_bar(ctx, p, st):
+    if ctx.n == 0:
+        return ctx.zeros()
     u = ctx.rotated(p["angle"])
     lo, hi = float(u.min()), float(u.max())
     span = max(hi - lo, 1e-6)
@@ -54,6 +56,8 @@ def _ripple(ctx, p, st):
          num("width", "Largura do feixe", 0.08, 0.01, 0.5),
          num("tail", "Rastro", 0.25, 0.0, 1.0), INTENSITY()])
 def _scan(ctx, p, st):
+    if ctx.n == 0:
+        return ctx.zeros()
     u = ctx.rotated(p["angle"])
     lo, hi = float(u.min()), float(u.max())
     span = max(hi - lo, 1e-6)
