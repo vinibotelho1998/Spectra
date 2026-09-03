@@ -1,3 +1,10 @@
+"""Icone na bandeja do Windows e o icone da janela.
+
+Fechar a janela manda o Prism para a bandeja em vez de encerrar, porque
+iluminacao e algo que fica ligado enquanto a maquina esta ligada. Sair
+de verdade so pelo menu da bandeja.
+"""
+
 from __future__ import annotations
 
 import os
@@ -9,6 +16,13 @@ ICONE_PNG = os.path.join(RAIZ, "assets", "prism.png")
 
 
 class Tray:
+    """Icone de bandeja com abrir, pausar e sair.
+
+    O menu monta os rotulos por funcao, e nao por texto fixo, para que o
+    estado mostrado, LEDs, fps e se esta pausado, esteja certo toda vez que
+    o menu abre.
+    """
+
     def __init__(self, window, app, on_quit):
         self.window = window
         self.app = app
@@ -53,6 +67,11 @@ class Tray:
         return f"{r.canvas.n} LEDs · {r.fps_actual:.0f} fps"
 
     def start(self) -> bool:
+        """Sobe o icone numa thread propria.
+
+        Devolve False quando a bandeja nao esta disponivel, caso em que o app
+        segue sem ela em vez de nao abrir.
+        """
         try:
             import pystray
             from PIL import Image
@@ -78,6 +97,7 @@ class Tray:
         return True
 
     def stop(self):
+        """Tira o icone da bandeja."""
         try:
             if self.icon:
                 self.icon.stop()
@@ -86,6 +106,11 @@ class Tray:
 
 
 def set_window_icon(titulo: str = "DBX Prism") -> bool:
+    """Aplica o icone do app na janela pelo titulo dela.
+
+    A janela nativa vem do webview e nao expoe o icone, entao ele e
+    colocado por mensagem do Windows depois que a janela ja existe.
+    """
     if not os.path.isfile(ICONE):
         return False
     try:

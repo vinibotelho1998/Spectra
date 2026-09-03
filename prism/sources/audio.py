@@ -1,3 +1,16 @@
+"""Captura do audio que esta tocando e analise em bandas.
+
+Usa loopback WASAPI, que grava o que sai pela caixa em vez de pedir
+microfone. O sinal e aberto na contagem de canais nativa do dispositivo,
+que em placa de som moderna passa de dois, e reduzido pelo par frontal
+esquerdo e direito: somar todos os canais afogaria o sinal, porque os
+traseiros costumam vir quase mudos.
+
+Depois vem FFT, agrupamento em bandas logaritmicas, que e como o ouvido
+divide o espectro, e ganho automatico, sem o qual musica com masterizacao
+baixa mal acenderia os LEDs.
+"""
+
 from __future__ import annotations
 
 import threading
@@ -10,6 +23,13 @@ BANDS = 24
 
 
 class AudioSource:
+    """Le o audio da saida padrao e mantem o `AudioState` atualizado.
+
+    Roda em thread propria e degrada em silencio: sem a biblioteca de
+    captura ou sem dispositivo de loopback, o `start` devolve False e o resto
+    do app segue sem os efeitos reativos.
+    """
+
     def __init__(self, state, device_index=None, fft_size: int = 2048):
         self.state = state
         self.device_index = device_index
@@ -32,6 +52,7 @@ class AudioSource:
 
     @staticmethod
     def list_devices():
+        """Lista os dispositivos de loopback disponiveis."""
         try:
             import pyaudiowpatch as pa
         except Exception as exc:
@@ -62,6 +83,10 @@ class AudioSource:
         raise RuntimeError("nenhum dispositivo de loopback casou com a saida padrao")
 
     def start(self):
+        """Abre o fluxo de captura e comeca a analisar.
+
+        Devolve False quando a captura nao esta disponivel nesta maquina.
+        """
         if self._thread and self._thread.is_alive():
             return True
         self._stop.clear()
@@ -97,6 +122,7 @@ class AudioSource:
             return False
 
     def stop(self):
+        """Fecha o fluxo e para a analise."""
         self._stop.set()
         try:
             if self._stream:
@@ -115,6 +141,7 @@ class AudioSource:
 
     @property
     def running(self) -> bool:
+        """Diz se a captura esta ativa."""
         return self._stream is not None
 
     def _build_bands(self):

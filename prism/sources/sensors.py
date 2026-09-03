@@ -1,3 +1,11 @@
+"""Leitura de temperatura, carga e rotacao, via LibreHardwareMonitor.
+
+A biblioteca e .NET e entra por ponte CLR, entao depende de uma DLL que
+nao vem no repositorio. Sem ela, e sem privilegio de administrador para
+ler os sensores, a fonte simplesmente fica indisponivel e os efeitos que
+dependem dela aparecem marcados na interface.
+"""
+
 from __future__ import annotations
 
 import os
@@ -19,6 +27,7 @@ VENDOR_DLL = _vendor_dll_path()
 
 
 class _LhmBackend:
+    """Ponte com a biblioteca .NET do LibreHardwareMonitor."""
 
     def __init__(self, dll_path: str = VENDOR_DLL):
         self.dll_path = dll_path
@@ -26,6 +35,7 @@ class _LhmBackend:
         self.error = None
 
     def open(self) -> bool:
+        """Carrega a DLL e liga os sensores, devolvendo se deu certo."""
         if not os.path.isfile(self.dll_path):
             self.error = "LibreHardwareMonitorLib.dll nao encontrada em vendor/"
             return False
@@ -50,6 +60,7 @@ class _LhmBackend:
             return False
 
     def close(self):
+        """Desliga os sensores e solta a biblioteca."""
         try:
             if self.computer:
                 self.computer.Close()
@@ -58,6 +69,7 @@ class _LhmBackend:
         self.computer = None
 
     def read(self) -> dict:
+        """Le uma rodada de sensores e devolve os valores por nome."""
         if not self.computer:
             return {}
         out: dict[str, float] = {}
@@ -103,6 +115,13 @@ class _LhmBackend:
 
 
 class SensorSource:
+    """Le os sensores periodicamente e mantem o `SensorState` atualizado.
+
+    Roda em thread propria com intervalo proprio, bem mais lento que o
+    render: temperatura nao muda em um sexagesimo de segundo, e ler sensor
+    custa caro.
+    """
+
     def __init__(self, state, interval: float = 1.0, dll_path: str = VENDOR_DLL):
         self.state = state
         self.interval = float(interval)
@@ -115,6 +134,11 @@ class SensorSource:
         self.available: list[str] = []
 
     def start(self) -> bool:
+        """Abre a ponte com a biblioteca e comeca a ler.
+
+        Devolve False quando a biblioteca nao esta presente ou o processo nao
+        tem privilegio para ler os sensores.
+        """
         if self._thread and self._thread.is_alive():
             return True
         try:
@@ -135,6 +159,7 @@ class SensorSource:
         return True
 
     def stop(self):
+        """Para a leitura e fecha a ponte."""
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=2.0)
@@ -143,9 +168,11 @@ class SensorSource:
 
     @property
     def running(self) -> bool:
+        """Diz se a leitura esta ativa."""
         return bool(self._thread and self._thread.is_alive())
 
     def status(self) -> dict:
+        """Descreve a disponibilidade da fonte para a interface."""
         return {"running": self.running, "lhm": self.lhm_ok,
                 "psutil": self.psutil_ok, "error": self.lhm.error or self.error,
                 "available": self.available, "dll_path": self.lhm.dll_path,

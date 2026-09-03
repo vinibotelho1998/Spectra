@@ -1,3 +1,12 @@
+"""Captura da tela para os efeitos de luz ambiente.
+
+Usa a duplicacao de area de trabalho do Windows, que entrega o quadro ja
+pronto pela placa de video, sem custo de composicao. O quadro e reduzido
+para uma grade pequena logo na entrada, porque nenhum efeito precisa de
+mais resolucao que isso e o gabinete tem dezenas de LEDs, nao milhoes de
+pixels.
+"""
+
 from __future__ import annotations
 
 import threading
@@ -7,6 +16,12 @@ import numpy as np
 
 
 class ScreenSource:
+    """Captura a tela e mantem o `ScreenState` atualizado.
+
+    Roda em thread propria e degrada em silencio quando a captura nao esta
+    disponivel.
+    """
+
     def __init__(self, state, output_idx: int = 0, fps: int = 30,
                  grid=(36, 64)):
         self.state = state
@@ -21,6 +36,7 @@ class ScreenSource:
 
     @staticmethod
     def list_outputs():
+        """Lista os monitores que dao para capturar."""
         try:
             import dxcam
         except Exception as exc:
@@ -37,6 +53,10 @@ class ScreenSource:
         return outs, None
 
     def start(self) -> bool:
+        """Abre a captura e comeca a alimentar o estado.
+
+        Devolve False quando a captura nao esta disponivel nesta maquina.
+        """
         if self._thread and self._thread.is_alive():
             return True
         try:
@@ -64,6 +84,7 @@ class ScreenSource:
         return True
 
     def stop(self):
+        """Fecha a captura."""
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=1.5)
@@ -78,6 +99,7 @@ class ScreenSource:
 
     @property
     def running(self) -> bool:
+        """Diz se a captura esta ativa."""
         return self._cam is not None
 
     def _downscale(self, img: np.ndarray) -> np.ndarray:

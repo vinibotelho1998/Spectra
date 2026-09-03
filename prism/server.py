@@ -1,3 +1,9 @@
+"""Servidor HTTP local que serve a interface e a API do app.
+
+A interface e web, rodando dentro de uma janela nativa. O servidor
+escuta so em 127.0.0.1, entao nada disso fica exposto na rede.
+"""
+
 from __future__ import annotations
 
 import json
@@ -14,11 +20,19 @@ ASSETS_DIR = os.path.join(ROOT, "assets")
 
 
 class Handler(BaseHTTPRequestHandler):
+    """Rotas da API e arquivos estaticos da interface.
+
+    Os caminhos estaticos sao normalizados e conferidos contra o diretorio
+    base, para que pedido com travessia de diretorio nao leia arquivo fora
+    da pasta da interface.
+    """
+
     protocol_version = "HTTP/1.1"
     server_version = "DBX-Prism"
     app: PrismApp = None
 
     def log_message(self, fmt, *args):
+        """Silencia o log por pedido, que so poluiria o console."""
         pass
 
     def _send(self, code, body: bytes, ctype="application/json; charset=utf-8"):
@@ -61,6 +75,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, f.read(), ctype)
 
     def do_GET(self):
+        """Responde a API de leitura e entrega os arquivos da interface."""
         p = self.path.split("?", 1)[0]
         a = self.app
         if p == "/api/state":
@@ -83,6 +98,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._static(p)
 
     def do_POST(self):
+        """Responde as rotas que mudam estado do app."""
         p = self.path.split("?", 1)[0]
         a = self.app
         b = self._body()
@@ -166,6 +182,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(app: PrismApp, host="127.0.0.1", port=7311):
+    """Sobe o servidor numa thread e devolve o endereco da interface."""
     Handler.app = app
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True

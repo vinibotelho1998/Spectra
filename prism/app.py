@@ -1,3 +1,17 @@
+"""Orquestracao do aplicativo: conexao, cena, perfis e descoberta de LED.
+
+`PrismApp` costura tudo: garante que o servidor OpenRGB esteja de pe,
+conecta, monta o renderizador, liga as fontes externas conforme a cena
+pede e persiste configuracao e perfis.
+
+Duas coisas moram aqui por serem do aplicativo, e nao do motor. A
+primeira e o vigia de conexao, que percebe queda e reconecta sozinho,
+porque o servidor OpenRGB e um processo separado que pode cair ou ser
+reiniciado. A segunda e a sessao de descoberta de LED: header ARGB de 3
+pinos nao tem retorno, entao a unica forma de saber quantos LEDs foram
+plugados e acender faixas e perguntar a quem esta olhando o gabinete.
+"""
+
 from __future__ import annotations
 
 import json
@@ -90,6 +104,14 @@ def _port_open(host="127.0.0.1", port=6742, timeout=0.4) -> bool:
 
 
 class PrismApp:
+    """Estado do aplicativo e as operacoes que a interface aciona.
+
+    Quase todo metodo publico daqui corresponde a uma rota da API. Os que
+    comecam com `probe_` formam o assistente de descoberta, que caminha por
+    busca binaria em varias zonas ao mesmo tempo para reduzir quantas
+    perguntas a pessoa precisa responder.
+    """
+
     def __init__(self, host="127.0.0.1", port=6742):
         os.makedirs(PROFILES_DIR, exist_ok=True)
         self.host, self.port = host, port
@@ -123,6 +145,7 @@ class PrismApp:
         return base
 
     def save_config(self):
+        """Grava a configuracao em disco, criando o diretorio se faltar."""
         with self._lock:
             if self.renderer:
                 self.config["settings"] = {
@@ -135,6 +158,12 @@ class PrismApp:
             os.replace(tmp, CONFIG_FILE)
 
     def ensure_openrgb(self, wait: float = 25.0) -> bool:
+        """Garante que o servidor OpenRGB esteja no ar, subindo se preciso.
+
+        Prefere a tarefa agendada, que roda elevada: sem privilegio de
+        administrador o OpenRGB nao enxerga a memoria RAM nem parte dos
+        controladores. Cai para o executavel comum quando a tarefa nao existe.
+        """
         if _port_open(self.host, self.port):
             return True
         if not self.config.get("autostart_openrgb"):
@@ -172,6 +201,7 @@ class PrismApp:
         return False
 
     def enforce_exclusive(self) -> dict:
+        """Fecha os softwares de RGB concorrentes e relata o que caiu."""
         from .core import exclusive
         if not self.config.get("exclusive_mode", True):
             return {"ok": True, "skipped": True, "fechados": [], "falhou": []}
@@ -185,6 +215,11 @@ class PrismApp:
         return r
 
     def connect(self, exclusive_pass: bool = False) -> bool:
+        """Conecta no servidor, carrega os dispositivos e monta o renderizador.
+
+        Aplica as contagens de LED salvas antes de montar o canvas, senao o mapa
+        sairia com o tamanho errado de cada header.
+        """
         if exclusive_pass:
             try:
                 self.enforce_exclusive()
@@ -229,6 +264,7 @@ class PrismApp:
         return True
 
     def start_watchdog(self):
+        """Sobe o vigia que reconecta quando a conexao cai."""
         if self._watchdog and self._watchdog.is_alive():
             return
         self._watchdog_stop.clear()
@@ -289,6 +325,7 @@ class PrismApp:
         self.renderer.load_scene(DEFAULT_SCENE)
 
     def shutdown(self, blank=True):
+        """Encerra tudo em ordem, apagando os LEDs por padrao."""
         self._watchdog_stop.set()
         try:
             self.save_config()
@@ -351,11 +388,13 @@ class PrismApp:
             self.sensors.stop()
 
     def set_layers(self, layers_json):
+        """Troca a pilha de camadas inteira, a partir do que veio da interface."""
         with self._lock:
             self.renderer.set_layers([Layer.from_json(d) for d in layers_json])
             self._sync_sources()
 
     def add_layer(self, effect_id: str, **kw):
+        """Acrescenta uma camada com o efeito pedido."""
         with self._lock:
             d = fx.get(effect_id)
             layer = Layer(effect_id, kw.get("params"), kw.get("blend", "normal"),
@@ -366,6 +405,7 @@ class PrismApp:
             return layer.to_json()
 
     def update_layer(self, layer_id: str, patch: dict):
+        """Aplica mudancas numa camada existente."""
         with self._lock:
             layer = self.renderer.get_layer(layer_id)
             if not layer:
@@ -387,16 +427,19 @@ class PrismApp:
             return layer.to_json()
 
     def remove_layer(self, layer_id: str):
+        """Tira uma camada pelo id."""
         with self._lock:
             self.renderer.remove_layer(layer_id)
             self._sync_sources()
 
     def reorder_layers(self, order):
+        """Reordena as camadas conforme a lista de ids."""
         with self._lock:
             by_id = {l.id: l for l in self.renderer.layers}
             self.renderer.layers = [by_id[i] for i in order if i in by_id]
 
     def update_settings(self, patch: dict):
+        """Altera brilho, gama, taxa de quadros e afins."""
         with self._lock:
             for k in ("brightness", "gamma", "fps", "smoothing", "paused"):
                 if k in patch:
@@ -409,6 +452,7 @@ class PrismApp:
             self.save_config()
 
     def set_zone_geometry(self, device_key_: str, zone_index: int, geometry: dict):
+        """Salva onde uma zona fica no mapa do gabinete."""
         with self._lock:
             layout = self.config.setdefault("layout", {})
             dev = layout.setdefault(device_key_, {}).setdefault("zones", {})
@@ -418,6 +462,7 @@ class PrismApp:
             self.save_config()
 
     def reset_layout(self):
+        """Descarta o mapa salvo e volta ao posicionamento automatico."""
         with self._lock:
             self.config["layout"] = {}
             self.renderer.layout_config = {}
@@ -425,6 +470,12 @@ class PrismApp:
             self.save_config()
 
     def resize_zones(self, changes, persist: bool = True):
+        """Aplica varias contagens de LED de uma vez e recarrega uma unica vez.
+
+        Fazer isso em lote importa: cada recarga de dispositivo faz o
+        controlador reaplicar o modo, e uma sequencia delas aparece como piscada
+        no gabinete inteiro.
+        """
         with self._lock:
             touched = False
             for device_key_, zone_index, size in changes:
@@ -469,6 +520,7 @@ class PrismApp:
 
     def resize_zone(self, device_key_: str, zone_index: int, size: int,
                     persist: bool = True):
+        """Aplica a contagem de LEDs de uma zona so."""
         return self.resize_zones([(device_key_, zone_index, size)], persist)
 
     def _probe_open_session(self, probe_max: int):
@@ -490,6 +542,7 @@ class PrismApp:
 
     def probe_start(self, device_key_: str, zone_index: int,
                     probe_max: int = 256):
+        """Abre uma sessao de descoberta numa zona, com o maximo a testar."""
         with self._lock:
             dev = next((d for d in self.renderer.all_devices
                         if device_key(d) == device_key_), None)
@@ -518,6 +571,7 @@ class PrismApp:
             return {"ok": True, "probe_max": n}
 
     def probe_paint(self, count: int, mode: str = "fill"):
+        """Acende uma quantidade de LEDs, para a pessoa conferir no gabinete."""
         pr = getattr(self, "_probe", None)
         if not pr:
             return {"ok": False, "error": "nenhuma descoberta em andamento"}
@@ -552,6 +606,7 @@ class PrismApp:
         return {"ok": True, "count": k, "of": n}
 
     def probe_stop(self, commit=None):
+        """Fecha a sessao de descoberta, gravando a contagem se houver."""
         with self._lock:
             pr = getattr(self, "_probe", None)
             if not pr:
@@ -565,6 +620,7 @@ class PrismApp:
             return {"ok": True, "committed": int(commit) if commit else None}
 
     def probe_commit(self, device_key_: str, zone_index: int, count: int):
+        """Grava a contagem descoberta para uma zona."""
         with self._lock:
             sess = getattr(self, "_probe_session", None)
             if sess is None:
@@ -573,6 +629,11 @@ class PrismApp:
             return {"ok": True}
 
     def probe_finish(self):
+        """Encerra o assistente, aplicando tudo que foi descoberto.
+
+        Grava contagens, planos de peca e o inventario respondido, e remonta o
+        canvas com o resultado.
+        """
         with self._lock:
             sess = getattr(self, "_probe_session", None)
             self._probe = None
@@ -600,6 +661,7 @@ class PrismApp:
             return {"ok": True, "applied": applied}
 
     def set_source_config(self, kind: str, cfg: dict):
+        """Reconfigura uma fonte externa, como o dispositivo de audio."""
         with self._lock:
             self.config.setdefault("sources", {})[kind] = cfg
             self.save_config()
@@ -613,6 +675,7 @@ class PrismApp:
             self._sync_sources()
 
     def apply_preset(self, preset_id: str):
+        """Carrega uma cena pronta pelo id."""
         p = ps.by_id(preset_id)
         if p is None:
             return {"ok": False, "error": "preset desconhecido"}
@@ -624,9 +687,11 @@ class PrismApp:
         return {"ok": True, "name": p.name, "needs": list(p.needs)}
 
     def setup_todo(self) -> list:
+        """Lista o que ainda falta configurar, para a interface avisar."""
         return [z for z in self.resizable_zones() if z["count"] == 0]
 
     def resizable_zones(self) -> list:
+        """Lista as zonas cuja contagem de LEDs pode ser informada."""
         out = []
         if not self.renderer:
             return out
@@ -657,6 +722,7 @@ class PrismApp:
             return False
 
     def probe_multi_start(self, probe_max: int = 256):
+        """Abre uma sessao de descoberta cobrindo varias zonas ao mesmo tempo."""
         with self._lock:
             if getattr(self, "_probe_session", None) is None:
                 self._probe_open_session(probe_max)
@@ -673,6 +739,7 @@ class PrismApp:
             return {"ok": True, "zones": zones}
 
     def probe_multi_paint(self, items):
+        """Acende faixas em varias zonas de uma vez, um passo da busca."""
         with self._lock:
             if getattr(self, "_probe_session", None) is None:
                 return {"ok": False, "error": "nenhuma sondagem em andamento"}
@@ -697,6 +764,7 @@ class PrismApp:
 
     def probe_split_preview(self, device_key_: str, zone_index: int,
                             seg_size: int, total: int):
+        """Mostra como uma zona ficaria dividida entre varias pecas."""
         with self._lock:
             dev, zone = self._find_zone(device_key_, zone_index)
             if dev is None or zone is None:
@@ -714,6 +782,7 @@ class PrismApp:
 
     def probe_isolate(self, device_key_: str, zone_index: int, start: int,
                       count: int, color: str = "#ffffff"):
+        """Acende so um trecho de uma zona, para identificar a peca."""
         with self._lock:
             dev, zone = self._find_zone(device_key_, zone_index)
             if dev is None or zone is None:
@@ -728,6 +797,11 @@ class PrismApp:
             return {"ok": True, "lit": z - a}
 
     def set_zone_plan(self, device_key_: str, zone_index: int, parts):
+        """Grava em quantas pecas uma zona se divide e o que cada uma e.
+
+        E o que separa seis fans pendurados num header so em seis unidades
+        independentes para os efeitos.
+        """
         with self._lock:
             geo_parts = []
             spots_used = {}
@@ -789,6 +863,7 @@ class PrismApp:
             return {"ok": True, "geometry": geo}
 
     def list_profiles(self):
+        """Lista os perfis salvos."""
         out = []
         for fn in sorted(os.listdir(PROFILES_DIR)):
             if fn.endswith(".json"):
@@ -796,6 +871,7 @@ class PrismApp:
         return out
 
     def save_profile(self, name: str):
+        """Salva a cena atual como perfil."""
         safe = "".join(c for c in name if c.isalnum() or c in " _-").strip()
         if not safe:
             return {"ok": False, "error": "nome invalido"}
@@ -807,6 +883,7 @@ class PrismApp:
         return {"ok": True, "name": safe}
 
     def load_profile(self, name: str, apply_only=False):
+        """Carrega um perfil salvo."""
         path = os.path.join(PROFILES_DIR, name + ".json")
         if not os.path.isfile(path):
             return False
@@ -823,6 +900,7 @@ class PrismApp:
         return True
 
     def delete_profile(self, name: str):
+        """Apaga um perfil salvo."""
         path = os.path.join(PROFILES_DIR, name + ".json")
         if os.path.isfile(path):
             os.remove(path)
@@ -830,6 +908,7 @@ class PrismApp:
         return False
 
     def catalog(self):
+        """Reune efeitos, presets, paletas e blends para a interface."""
         return {
             "effects": fx.catalog(),
             "blends": [{"value": v, "label": l} for v, l in blend.LABELS],
@@ -840,6 +919,7 @@ class PrismApp:
         }
 
     def state(self) -> dict:
+        """Fotografia do estado atual, que a interface consulta em laco."""
         r = self.renderer
         out = {
             "connected": self.connected,
@@ -899,6 +979,7 @@ class PrismApp:
         return d
 
     def preview(self):
+        """Cores do quadro atual, para a interface desenhar o mapa ao vivo."""
         r = self.renderer
         if not r or r.frame is None:
             return []
