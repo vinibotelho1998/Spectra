@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: leva mais de um segundo, roda so quando pedido",
+]
+filterwarnings = ["error::RuntimeWarning"]
