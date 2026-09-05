@@ -37,17 +37,7 @@ def main() -> int:
         return 0
 
     app = PrismApp(port=args.orgb_port)
-    ok = app.connect(exclusive_pass=True)
-    print(f"[prism] {app.status_msg}")
-    if ok:
-        r = app.renderer
-        print(f"[prism] {len(r.canvas.devices)} device(s), {r.canvas.n} leds, "
-              f"protocolo v{app.client.protocol}")
-        for d in r.canvas.devices:
-            flag = "direct" if r.direct_ok.get(d.index) else "SEM DIRECT"
-            print(f"        - {d.name} ({d.led_count} leds, {flag})")
-    else:
-        print("[prism] seguindo sem hardware; a UI sobe mesmo assim")
+    app.status_msg = "conectando ao OpenRGB"
 
     try:
         httpd = serve(app, port=args.port)
@@ -60,6 +50,9 @@ def main() -> int:
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     print(f"[prism] interface em {url}")
+
+    threading.Thread(target=connect_in_background, args=(app,),
+                     name="prism-connect", daemon=True).start()
 
     code = 0
     try:
@@ -79,6 +72,26 @@ def main() -> int:
         httpd.shutdown()
         app.shutdown(blank=not args.keep_leds)
     return code
+
+
+def connect_in_background(app: PrismApp) -> None:
+    """Conecta no OpenRGB sem segurar a janela.
+
+    Subir o servidor e detectar hardware pode levar mais de vinte segundos;
+    a janela abre na hora mostrando "conectando" em vez de parecer que o
+    programa nao abriu.
+    """
+    ok = app.connect(exclusive_pass=True)
+    print(f"[prism] {app.status_msg}")
+    if ok:
+        r = app.renderer
+        print(f"[prism] {len(r.canvas.devices)} device(s), {r.canvas.n} leds, "
+              f"protocolo v{app.client.protocol}")
+        for d in r.canvas.devices:
+            flag = "direct" if r.direct_ok.get(d.index) else "SEM DIRECT"
+            print(f"        - {d.name} ({d.led_count} leds, {flag})")
+    else:
+        print("[prism] seguindo sem hardware; a UI sobe mesmo assim")
 
 
 def run_window(url: str, app: PrismApp) -> int:
