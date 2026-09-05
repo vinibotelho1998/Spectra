@@ -3,6 +3,22 @@
 const NEED_LABEL = { audio: "audio", screen: "tela", sensors: "sensores" };
 
 let showAllPresets = false;
+let presetCat = "todos";
+
+const FAV_KEY = "prism.favoritos";
+
+function loadFavs() {
+  try {
+    const v = JSON.parse(localStorage.getItem(FAV_KEY) || "[]");
+    return new Set(Array.isArray(v) ? v : []);
+  } catch (e) { return new Set(); }
+}
+
+function saveFavs(set) {
+  try { localStorage.setItem(FAV_KEY, JSON.stringify([...set])); } catch (e) {}
+}
+
+let FAVS = loadFavs();
 
 function presetById(id) {
   for (const g of ((S.catalog && S.catalog.presets) || []))
@@ -10,15 +26,119 @@ function presetById(id) {
   return null;
 }
 
+function allPresets() {
+  const out = [];
+  for (const g of ((S.catalog && S.catalog.presets) || []))
+    for (const p of g.presets) out.push(p);
+  return out;
+}
+
+/* --------------------------------------------------------- barra rapida */
+
+const QUICK_COLORS = ["#ff2d55", "#ff7a00", "#ffd60a", "#22e08a",
+                      "#00d9ff", "#4361ee", "#a855f7", "#ffffff"];
+
+function buildQuickBar() {
+  const box = $("#quickSwatches");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const c of QUICK_COLORS) {
+    const b = document.createElement("button");
+    b.className = "sw";
+    b.style.background = c;
+    b.title = c;
+    b.addEventListener("click", () => applySolid(c));
+    box.appendChild(b);
+  }
+  $("#quickColor").addEventListener("input", (e) => applySolidSoon(e.target.value));
+  $("#btnShuffle").addEventListener("click", () => {
+    const pool = allPresets().filter((p) => showAllPresets || p.refined !== false);
+    if (!pool.length) return;
+    applyPreset(pool[Math.floor(Math.random() * pool.length)].id);
+  });
+}
+
+/** Troca a cena inteira por uma cor chapada. E o caso de uso mais comum de
+ *  todos, e antes exigia montar uma camada na aba Avancado. */
+async function applySolid(hex) {
+  $("#quickColor").value = hex;
+  const antes = snapshotScene();
+  try {
+    await API.post("/api/layers", {
+      preset: null,
+      layers: [{ effect: "static", params: { color: hex, intensity: 1.0 },
+                 blend: "normal", opacity: 1.0, enabled: true, name: "Cor unica" }],
+    });
+    S.selected = null;
+    await refreshState();
+    renderParams();
+    renderNowPlaying();
+    markActivePreset();
+    toast(`Cor ${hex} aplicada`, false, undoAction(antes));
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+// o throttle mora no app.js, que carrega depois deste arquivo: por isso a
+// versao espacada e montada na primeira chamada, e nao aqui em cima
+let _solidSoon = null;
+function applySolidSoon(hex) {
+  if (!_solidSoon) _solidSoon = throttle((h) => applySolid(h), 180);
+  _solidSoon(hex);
+}
+
+function snapshotScene() {
+  const st = S.state || {};
+  return {
+    layers: (st.layers || []).map((l) => ({ ...l })),
+    preset: st.last_preset || null,
+  };
+}
+
+function undoAction(antes) {
+  if (!antes || !antes.layers.length) return null;
+  return {
+    label: "Desfazer",
+    run: async () => {
+      try {
+        await API.post("/api/layers", { layers: antes.layers, preset: antes.preset });
+        S.selected = null;
+        await refreshState();
+        renderParams();
+        renderNowPlaying();
+        markActivePreset();
+        toast("Cena anterior restaurada");
+      } catch (e) { toast(e.message, true); }
+    },
+  };
+}
+
+/* ---------------------------------------------------------- vitrine */
+
 function renderPresets(filter) {
   const box = $("#presetGrid");
   if (!box || !S.catalog) return;
   const q = (filter !== undefined ? filter : ($("#presetSearch").value || ""))
     .trim().toLowerCase();
+  renderPresetChips();
   box.innerHTML = "";
-  for (const g of (S.catalog.presets || [])) {
+
+  const disponivel = (p) => {
+    if (!p.needs.length) return true;
+    const s = (S.state && S.state.sources) || {};
+    return p.needs.every((n) => !(s[n] && s[n].error && !s[n].running));
+  };
+
+  let mostrados = 0;
+  const grupos = presetCat === "favoritos"
+    ? [{ category: "Favoritos", presets: allPresets().filter((p) => FAVS.has(p.id)) }]
+    : (S.catalog.presets || []).filter(
+        (g) => presetCat === "todos" || g.category === presetCat);
+
+  for (const g of grupos) {
     const items = g.presets.filter(
-      (p) => (showAllPresets || p.refined !== false) &&
+      (p) => (showAllPresets || p.refined !== false || FAVS.has(p.id)) &&
              (!q || p.name.toLowerCase().includes(q) ||
               p.description.toLowerCase().includes(q) ||
               g.category.toLowerCase().includes(q)));
@@ -26,36 +146,27 @@ function renderPresets(filter) {
 
     const t = document.createElement("div");
     t.className = "cat-title";
-    t.textContent = g.category;
+    t.innerHTML = `${esc(g.category)}<span class="n">${items.length}</span>`;
     box.appendChild(t);
 
     const grid = document.createElement("div");
     grid.className = "preset-grid";
     for (const p of items) {
-      const b = document.createElement("button");
-      b.className = "preset";
-      b.dataset.preset = p.id;
-      const cols = p.swatch.concat(p.swatch[0]).join(",");
-      const badge = p.needs.length
-        ? `<span class="badge">usa ${p.needs.map((n) => NEED_LABEL[n] || n).join(" + ")}</span>`
-        : (p.refined === false ? `<span class="badge forte">intenso</span>` : "");
-      b.innerHTML =
-        `<div class="swatch" style="background-image:linear-gradient(90deg,${cols})"></div>` +
-        badge +
-        `<span class="playing" hidden>tocando</span>` +
-        `<div class="body"><div class="t">${esc(p.name)}</div>` +
-        `<div class="d">${esc(p.description)}</div></div>`;
-      b.addEventListener("click", () => applyPreset(p.id));
-      grid.appendChild(b);
+      mostrados++;
+      grid.appendChild(presetCard(p, disponivel(p)));
     }
     box.appendChild(grid);
   }
-  if (!box.children.length)
-    box.innerHTML = `<p class="muted center" style="padding:30px">Nada encontrado.</p>`;
 
-  const escondidos = (S.catalog.presets || [])
-    .reduce((a, g) => a + g.presets.filter((p) => p.refined === false).length, 0);
-  if (escondidos) {
+  if (!mostrados) {
+    box.innerHTML = presetCat === "favoritos"
+      ? `<p class="muted center" style="padding:30px">Nenhum favorito ainda. Passe o mouse
+         num efeito e clique na estrela.</p>`
+      : `<p class="muted center" style="padding:30px">Nada encontrado.</p>`;
+  }
+
+  const escondidos = allPresets().filter((p) => p.refined === false && !FAVS.has(p.id)).length;
+  if (escondidos && presetCat !== "favoritos") {
     const bar = document.createElement("div");
     bar.className = "preset-more";
     bar.innerHTML = showAllPresets
@@ -73,6 +184,63 @@ function renderPresets(filter) {
   markActivePreset();
 }
 
+function presetCard(p, disponivel) {
+  const b = document.createElement("button");
+  b.className = "preset";
+  b.dataset.preset = p.id;
+  const cols = p.swatch.concat(p.swatch[0]).join(",");
+  const badge = p.needs.length
+    ? `<span class="badge">usa ${p.needs.map((n) => NEED_LABEL[n] || n).join(" + ")}</span>`
+    : (p.refined === false ? `<span class="badge forte">intenso</span>` : "");
+  b.innerHTML =
+    `<div class="swatch" style="--sw:linear-gradient(90deg,${cols})"></div>` +
+    badge +
+    `<span class="playing" hidden>tocando</span>` +
+    `<div class="body"><div class="t">${esc(p.name)}</div>` +
+    `<div class="d">${esc(p.description)}</div></div>` +
+    `<button class="fav${FAVS.has(p.id) ? " on" : ""}" title="Favoritar">${ICON_STAR}</button>`;
+  if (!disponivel) b.title = "A fonte que este efeito usa esta indisponivel agora";
+  b.addEventListener("click", (e) => {
+    if (e.target.closest(".fav")) return;
+    applyPreset(p.id);
+  });
+  b.querySelector(".fav").addEventListener("click", (e) => {
+    e.stopPropagation();
+    FAVS.has(p.id) ? FAVS.delete(p.id) : FAVS.add(p.id);
+    saveFavs(FAVS);
+    e.currentTarget.classList.toggle("on", FAVS.has(p.id));
+    renderPresetChips();
+  });
+  return b;
+}
+
+function renderPresetChips() {
+  const box = $("#presetChips");
+  if (!box || !S.catalog) return;
+  const cats = (S.catalog.presets || []).map((g) => g.category);
+  const total = allPresets().filter((p) => showAllPresets || p.refined !== false).length;
+  const opts = [["todos", "Todos", total]];
+  if (FAVS.size) opts.push(["favoritos", "Favoritos", FAVS.size]);
+  for (const g of (S.catalog.presets || [])) {
+    const n = g.presets.filter((p) => showAllPresets || p.refined !== false).length;
+    if (n) opts.push([g.category, g.category, n]);
+  }
+  if (!cats.includes(presetCat) && presetCat !== "todos" && presetCat !== "favoritos")
+    presetCat = "todos";
+
+  box.innerHTML = "";
+  for (const [id, label, n] of opts) {
+    const b = document.createElement("button");
+    b.className = "chip" + (presetCat === id ? " on" : "");
+    b.innerHTML = `${esc(label)}<span class="n">${n}</span>`;
+    b.addEventListener("click", () => {
+      presetCat = id;
+      renderPresets();
+    });
+    box.appendChild(b);
+  }
+}
+
 function markActivePreset() {
   const cur = S.state && S.state.last_preset;
   $$(".preset").forEach((el) => {
@@ -84,6 +252,7 @@ function markActivePreset() {
 }
 
 async function applyPreset(id) {
+  const antes = snapshotScene();
   try {
     const r = await API.post("/api/preset/apply", { id });
     if (!r.ok) return toast(r.error || "falhou ao aplicar", true);
@@ -96,12 +265,17 @@ async function applyPreset(id) {
     let msg = p ? `${p.name} aplicado` : "aplicado";
     if (r.needs && r.needs.length)
       msg += ` — ligando ${r.needs.map((n) => NEED_LABEL[n] || n).join(" + ")}`;
-    toast(msg);
+    toast(msg, false, undoAction(antes));
   } catch (e) {
     toast(e.message, true);
   }
 }
 
+/* ---------------------------------------------------------- tocando agora */
+
+/** Alem do nome da cena, traz os controles que a pessoa mais quer mexer logo
+ *  depois de aplicar um efeito: velocidade, paleta e cor da primeira camada.
+ *  Antes isso exigia ir ate a aba Avancado e selecionar a camada. */
 function renderNowPlaying() {
   const box = $("#nowPlaying");
   if (!box) return;
@@ -112,13 +286,65 @@ function renderNowPlaying() {
     box.innerHTML = `<p class="muted center" style="padding:12px 0">Nada tocando.</p>`;
     return;
   }
-  const names = layers.filter((l) => l.enabled)
-    .map((l) => esc(l.name || l.effect)).join(" + ");
   box.innerHTML =
     `<div class="np-name">${esc(p ? p.name : "Cena personalizada")}</div>` +
-    `<div class="np-desc">${esc(p ? p.description : "Montada na aba Avancado.")}</div>` +
-    `<div class="np-layers">Camadas: <b>${names || "nenhuma ativa"}</b></div>`;
+    `<div class="np-desc">${esc(p ? p.description : "Montada na aba Avancado.")}</div>`;
+
+  const acts = document.createElement("div");
+  acts.className = "np-actions";
+  const edit = document.createElement("button");
+  edit.className = "btn sm";
+  edit.textContent = "Editar na aba Avancado";
+  edit.addEventListener("click", () => {
+    const first = layers[layers.length - 1];
+    if (first) S.selected = first.id;
+    showTab("scene");
+    renderLayers();
+    renderParams();
+  });
+  acts.appendChild(edit);
+  box.appendChild(acts);
+
+  const visiveis = [...layers].reverse().slice(0, 3);
+  for (const L of visiveis) {
+    const d = effectDef(L.effect);
+    if (!d) continue;
+    const wrap = document.createElement("div");
+    wrap.className = "np-layer";
+    const head = document.createElement("div");
+    head.className = "np-head";
+    head.innerHTML = `<b>${esc(L.name || d.label)}</b><span>${esc(d.label)}</span>` +
+      (L.enabled ? "" : `<span class="np-off">desligada</span>`);
+    wrap.appendChild(head);
+
+    const quick = d.params.filter((q) => ["speed", "palette", "color", "intensity"]
+      .includes(q.name)).slice(0, 3);
+    for (const q of quick) {
+      const el = paramControl(q, L, (v) => {
+        Object.assign(L.params, { [q.name]: v });
+        API.post("/api/layer/update", { id: L.id, patch: { params: { [q.name]: v } } })
+          .catch(() => {});
+      }, true);
+      if (el) wrap.appendChild(el);
+    }
+    if (!quick.length) {
+      const none = document.createElement("p");
+      none.className = "hint";
+      none.style.margin = "0";
+      none.textContent = "Sem ajuste rapido; abra a aba Avancado para os parametros.";
+      wrap.appendChild(none);
+    }
+    box.appendChild(wrap);
+  }
+  if (layers.length > visiveis.length) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = `Mais ${layers.length - visiveis.length} camada(s) na aba Avancado.`;
+    box.appendChild(p);
+  }
 }
+
+/* ----------------------------------------------------- aviso de instalacao */
 
 function renderSetupBanner() {
   const box = $("#setupBanner");
@@ -126,8 +352,42 @@ function renderSetupBanner() {
   const st = S.state || {};
   const todo = st.setup_todo || [];
   const leds = (st.canvas && st.canvas.led_count) || 0;
-
   const resizable = st.zones_resizable || [];
+
+  if (st.connecting && !st.connected) {
+    box.innerHTML = `
+      <div class="setup info">
+        <div class="head-row">
+          <h3>Conectando ao OpenRGB</h3>
+          <span class="spin"></span>
+        </div>
+        <p>Subindo o servidor e detectando o hardware. Na primeira vez isso
+        pode levar alguns segundos.</p>
+      </div>`;
+    return;
+  }
+
+  if (!st.connected) {
+    box.innerHTML = `
+      <div class="setup err">
+        <div class="head-row">
+          <h3>Sem conexao com o OpenRGB</h3>
+          <button class="btn sm" id="bannerReconnect">Tentar de novo</button>
+        </div>
+        <p>${esc(st.status || "o servidor do OpenRGB nao respondeu")}.
+        O Prism usa o OpenRGB so como camada de hardware: sem ele no ar,
+        nenhum LED e alcancado. Baixe em <code>openrgb.org</code> e deixe
+        instalado em <code>C:\\Program Files</code> que o Prism sobe sozinho.</p>
+      </div>`;
+    const b = $("#bannerReconnect");
+    if (b) b.addEventListener("click", async () => {
+      b.classList.add("busy");
+      try { await API.post("/api/reconnect"); } catch (e) { toast(e.message, true); }
+      b.classList.remove("busy");
+      refreshState();
+    });
+    return;
+  }
 
   if (!todo.length) {
     if (!leds) {
@@ -135,7 +395,8 @@ function renderSetupBanner() {
         <div class="setup">
           <h3>Nenhum LED controlavel</h3>
           <p>O Prism conectou no OpenRGB, mas nao ha LEDs ativos. Confira a aba
-          <b>Hardware</b>.</p>
+          <b>Hardware</b>: pode ser que todos os dispositivos estejam desligados
+          do controle, ou que nenhum tenha modo Direct.</p>
         </div>`;
       return;
     }
@@ -177,7 +438,7 @@ function renderSetupBanner() {
       <p>Estes conectores estao com <b>0 LEDs</b>, entao nada acende neles.
       Ninguem consegue detectar isso automaticamente: o padrao ARGB e mao unica,
       a fita nunca responde quantos LEDs tem. Mas o <b>assistente</b> descobre
-      para voce — ele acende um LED de cada vez e pergunta se acendeu, achando o
+      para voce — ele acende trechos e pergunta o que voce ve, achando o
       numero exato em poucos cliques.</p>
       <div class="rows">${rows}</div>
       <p class="note">Faltando RAM, water cooler ou GPU na lista? Esses vao por
@@ -195,13 +456,11 @@ function renderSetupBanner() {
       qb.addEventListener("click", () => { inp.value = qb.dataset.n; inp.focus(); }));
     row.querySelector(".find").addEventListener("click", () =>
       openProbe(row.dataset.dev, parseInt(row.dataset.zone, 10),
-                row.querySelector(".nm").textContent.split("·")[0].trim(), false));
-    row.querySelector(".apply").addEventListener("click", async (e) => {
-      const btn = e.target;
+                row.querySelector(".nm").textContent.split("·")[0].trim()));
+    const aplicar = async (btn) => {
       const n = parseInt(inp.value, 10);
       if (!(n > 0)) return toast("Digite quantos LEDs esse conector tem", true);
-      btn.disabled = true;
-      btn.textContent = "…";
+      btn.classList.add("busy");
       try {
         const r = await API.post("/api/zone/resize", {
           device: row.dataset.dev,
@@ -212,9 +471,14 @@ function renderSetupBanner() {
       } catch (err) {
         toast(err.message, true);
       }
+      btn.classList.remove("busy");
       await refreshState();
       renderSetupBanner();
       renderPresets();
+    };
+    row.querySelector(".apply").addEventListener("click", (e) => aplicar(e.currentTarget));
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") aplicar(row.querySelector(".apply"));
     });
   });
 }
