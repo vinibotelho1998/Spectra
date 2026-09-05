@@ -24,6 +24,7 @@ import time
 
 import numpy as np
 
+from . import __version__
 from . import effects as fx
 from .core.protocol import OpenRGBClient, OpenRGBError
 from .engine import blend
@@ -129,6 +130,9 @@ class PrismApp:
         self.reconnects = 0
         self.last_exclusive = None
         self.last_error_exclusive = None
+        self.connecting = False
+        self._identify_until = 0.0
+        self._identify_was_paused = False
 
     def _load_config(self) -> dict:
         base = {"layout": {}, "enabled_devices": {}, "zone_sizes": {},
@@ -218,8 +222,17 @@ class PrismApp:
         """Conecta no servidor, carrega os dispositivos e monta o renderizador.
 
         Aplica as contagens de LED salvas antes de montar o canvas, senao o mapa
-        sairia com o tamanho errado de cada header.
+        sairia com o tamanho errado de cada header. `connecting` fica ligado
+        durante a tentativa, para a interface distinguir "ainda tentando" de
+        "falhou".
         """
+        self.connecting = True
+        try:
+            return self._connect(exclusive_pass)
+        finally:
+            self.connecting = False
+
+    def _connect(self, exclusive_pass: bool) -> bool:
         if exclusive_pass:
             try:
                 self.enforce_exclusive()
@@ -387,10 +400,19 @@ class PrismApp:
         elif self.sensors and self.sensors.running:
             self.sensors.stop()
 
-    def set_layers(self, layers_json):
-        """Troca a pilha de camadas inteira, a partir do que veio da interface."""
+    def set_layers(self, layers_json, preset="keep"):
+        """Troca a pilha de camadas inteira, a partir do que veio da interface.
+
+        `preset` diz qual cena pronta essa pilha representa: None marca cena
+        personalizada, um id marca o preset, e "keep" deixa como estava. E o
+        que permite desfazer a aplicacao de um preset sem a vitrine continuar
+        apontando para ele.
+        """
         with self._lock:
             self.renderer.set_layers([Layer.from_json(d) for d in layers_json])
+            if preset != "keep":
+                self.config["last_preset"] = preset
+                self.save_config()
             self._sync_sources()
 
     def add_layer(self, effect_id: str, **kw):
@@ -442,13 +464,25 @@ class PrismApp:
         """Altera brilho, gama, taxa de quadros e afins."""
         with self._lock:
             for k in ("brightness", "gamma", "fps", "smoothing", "paused"):
-                if k in patch:
+                if k in patch and self.renderer:
                     self.renderer.settings[k] = patch[k]
-            if "enabled_devices" in patch:
+            for k in ("exclusive_mode", "autostart_openrgb"):
+                if k in patch:
+                    self.config[k] = bool(patch[k])
+            if "enabled_devices" in patch and self.renderer:
                 self.renderer.settings["enabled_devices"] = patch["enabled_devices"]
                 self.config["enabled_devices"] = patch["enabled_devices"]
                 self.renderer.rebuild()
                 self.renderer.arm_direct()
+            # com o render pausado o laco nao envia nada, entao mudar o brilho
+            # nao apareceria no gabinete ate despausar; um empurrao resolve
+            if ("brightness" in patch and self.renderer
+                    and self.renderer.settings.get("paused")
+                    and self.renderer.frame is not None):
+                try:
+                    self.renderer.push(self.renderer.frame)
+                except OpenRGBError:
+                    pass
             self.save_config()
 
     def set_zone_geometry(self, device_key_: str, zone_index: int, geometry: dict):
@@ -796,6 +830,52 @@ class PrismApp:
             self._paint_zone(dev, zone, buf)
             return {"ok": True, "lit": z - a}
 
+    def identify_zone(self, device_key_: str, zone_index: int,
+                      seconds: float = 1.6, color: str = "#ffffff"):
+        """Acende uma zona sozinha por alguns segundos, para achar a peca.
+
+        Pausa o render, pinta so aquela zona e agenda a retomada. Chamadas em
+        sequencia estendem o prazo em vez de retomar cedo, entao clicar em
+        varias zonas seguidas nao deixa o gabinete piscando entre elas.
+        """
+        with self._lock:
+            if not self.renderer:
+                return {"ok": False, "error": "sem renderizador"}
+            dev, zone = self._find_zone(device_key_, zone_index)
+            if dev is None or zone is None:
+                return {"ok": False, "error": "zona nao encontrada"}
+            if getattr(self, "_probe_session", None) is not None:
+                return {"ok": False, "error": "assistente em andamento"}
+            r = self.renderer
+            if self._identify_until <= time.time():
+                self._identify_was_paused = bool(r.settings.get("paused"))
+            self._identify_until = time.time() + max(0.3, float(seconds))
+            r.settings["paused"] = True
+        time.sleep(0.07)
+        with self._lock:
+            r.blank()
+            cr, cg, cb = (int(v * 255) for v in hex_to_rgb(color))
+            buf = np.zeros((zone.leds_count, 4), dtype=np.uint8)
+            buf[:, :3] = (cr, cg, cb)
+            self._paint_zone(dev, zone, buf)
+
+        def restore():
+            while True:
+                left = self._identify_until - time.time()
+                if left <= 0:
+                    break
+                time.sleep(min(left, 0.2))
+            with self._lock:
+                if self._identify_until > time.time():
+                    return
+                if getattr(self, "_probe_session", None) is None:
+                    self.renderer.settings["paused"] = self._identify_was_paused
+                self._identify_until = 0.0
+
+        threading.Thread(target=restore, daemon=True,
+                         name="prism-identify").start()
+        return {"ok": True, "lit": zone.leds_count, "seconds": seconds}
+
     def set_zone_plan(self, device_key_: str, zone_index: int, parts):
         """Grava em quantas pecas uma zona se divide e o que cada uma e.
 
@@ -923,8 +1003,11 @@ class PrismApp:
         r = self.renderer
         out = {
             "connected": self.connected,
+            "connecting": self.connecting,
             "status": self.status_msg,
             "protocol": self.client.protocol,
+            "version": __version__,
+            "config_dir": CONFIG_DIR,
             "profiles": self.list_profiles(),
             "last_profile": self.config.get("last_profile"),
         }
@@ -941,6 +1024,7 @@ class PrismApp:
             "reconnects": self.reconnects,
             "exclusive": self.last_exclusive,
             "exclusive_mode": self.config.get("exclusive_mode", True),
+            "autostart_openrgb": self.config.get("autostart_openrgb", True),
             "connection_lost": r.connection_lost,
             "canvas": r.canvas.to_json(),
             "devices": [
@@ -985,3 +1069,34 @@ class PrismApp:
             return []
         rgba = r.to_wire(r.frame)[:, :3]
         return ["#%02x%02x%02x" % tuple(int(v) for v in c) for c in rgba]
+
+    def preview_hex(self) -> str:
+        """O quadro atual como uma unica string hex, seis digitos por LED.
+
+        E o formato que vai pelo stream: uma string so custa uma fracao do
+        que custaria uma lista com uma cor por LED, em serializacao e em bytes.
+        """
+        r = self.renderer
+        if not r or r.frame is None:
+            return ""
+        return np.ascontiguousarray(r.to_wire(r.frame)[:, :3]).tobytes().hex()
+
+    def live_sources(self) -> dict:
+        """Leitura instantanea das fontes ligadas, para os medidores da interface."""
+        out = {}
+        r = self.renderer
+        if not r:
+            return out
+        if self.audio and self.audio.running:
+            a = r.ctx.audio
+            out["audio"] = {
+                "level": round(float(a.level), 3), "bass": round(float(a.bass), 3),
+                "mid": round(float(a.mid), 3), "treble": round(float(a.treble), 3),
+                "beat": round(float(a.beat), 3),
+                "bands": [round(float(v), 3) for v in a.bands],
+            }
+        if self.screen and self.screen.running:
+            avg = getattr(r.ctx.screen, "average", None)
+            if avg is not None:
+                out["screen"] = [round(float(v), 3) for v in list(avg)[:3]]
+        return out
