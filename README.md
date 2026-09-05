@@ -74,7 +74,7 @@ prism/effects/            107 efeitos em 11 categorias
 prism/presets.py          87 cenas prontas
 prism/sources/            áudio (loopback WASAPI), tela (dxcam), sensores
 prism/app.py              estado, perfis, assistente, vigia de conexão
-prism/server.py           HTTP local + API
+prism/server.py           HTTP local + API + stream do quadro
 prism/tray.py             bandeja do sistema, fechar-minimiza
 ui/                       interface (HTML/CSS/JS puro, sem build)
 ```
@@ -108,6 +108,36 @@ por padrão os 76 mais refinados, com os mais intensos (estrobo, flashes)
 escondidos atrás de "Mostrar todos". Camadas podem ser combinadas com 12 modos
 de mistura na aba Avançado, e as fontes de áudio/tela/sensores ligam sozinhas
 conforme as camadas ativas.
+
+## Interface
+
+Sete abas, todas sobre o mesmo motor:
+
+- **Efeitos** — a vitrine. Filtro por categoria, busca, favoritos que ficam
+  salvos no navegador, uma barra de **cor única** para quando a vontade é só
+  "deixa tudo laranja", e *Surpreenda-me*. O painel **Tocando agora** traz
+  velocidade, paleta e cor da cena aplicada ali mesmo, sem precisar abrir o
+  editor. Toda troca de cena mostra **Desfazer** por alguns segundos.
+- **Avançado** — pilha de camadas com arrastar para reordenar, duplicar,
+  ligar/desligar, alvo por dispositivo ou por zona, e os parâmetros completos
+  do efeito selecionado.
+- **Layout** — o mapa físico do gabinete, com as cores reais do efeito
+  correndo por cima. **Piscar** acende uma zona sozinha no gabinete, que é como
+  se descobre qual fita é qual. Setas do teclado fazem o ajuste fino.
+- **Hardware** — o que o OpenRGB expõe, quantos LEDs cada conector tem, quem
+  está em modo Direct e quem não está (e por quê).
+- **Fontes** — áudio, tela e sensores, com espectro ao vivo e a cor média da
+  tela para conferir que a captura está mesmo chegando.
+- **Perfis** — a cena inteira salva por nome; a última volta sozinha ao abrir.
+- **Ajustes** — gama, taxa de quadros, suavização, modo exclusivo, início
+  automático do OpenRGB e a lista de atalhos.
+
+Atalhos: `Espaço` pausa, `/` busca, `Ctrl+1…7` troca de aba, `Esc` fecha o
+seletor de efeitos.
+
+O quadro chega na interface por **Server-Sent Events**, uma conexão só,
+empurrando apenas quando a imagem muda — no lugar de um pedido HTTP a cada
+33 ms.
 
 ## Assistente de LEDs
 
@@ -143,6 +173,12 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
   o device ainda não está nele.
 - **Fechar minimiza.** A bandeja do sistema mantém o app rodando e os efeitos
   animados; sair de verdade é uma opção explícita no menu dela.
+- **A janela abre na hora.** A conexão com o OpenRGB acontece numa thread à
+  parte, então a interface aparece imediatamente mostrando "conectando" em vez
+  de parecer travada por até vinte segundos na primeira execução.
+- **Só a própria interface manda no app.** O servidor escuta apenas em
+  loopback, mas qualquer site aberto no navegador também alcança loopback:
+  pedidos de escrita com `Origin` de outra origem são recusados.
 
 ## Limitações conhecidas
 
@@ -187,6 +223,7 @@ tools/identify.py        pinta cada zona de uma cor: mapeia peça → controlado
 tools/hidscan.py         nomes reais dos dispositivos HID conectados
 tools/smoke.py           roda todos os efeitos sem hardware e valida a saída
 tools/srctest.py         testa áudio, tela e sensores isoladamente
+tools/uidev.py           sobe a interface com hardware falso, sem tocar nos LEDs
 tools/uicheck.py         abre a UI real e interroga o DOM por dentro
 tools/reconnect_test.py  derruba o OpenRGB e verifica a recuperação
 tools/dump.py             hexdump do blob de um controlador
