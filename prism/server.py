@@ -10,6 +10,7 @@ import json
 import mimetypes
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import effects as fx
@@ -59,6 +60,56 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    def _foreign(self) -> bool:
+        """Diz se o pedido veio de uma pagina de outra origem.
+
+        O servidor so escuta em loopback, mas qualquer site aberto no
+        navegador da pessoa tambem alcanca o loopback. Um POST com `Origin`
+        diferente da nossa, ou sem JSON, e recusado para que uma pagina
+        qualquer nao apague os LEDs nem encerre o app.
+        """
+        origin = self.headers.get("Origin")
+        if origin:
+            host = self.headers.get("Host") or ""
+            if origin.split("://", 1)[-1].rstrip("/") != host:
+                return True
+        ctype = (self.headers.get("Content-Type") or "").lower()
+        return "application/json" not in ctype
+
+    def _stream(self):
+        """Empurra o quadro atual por Server-Sent Events, a ate 30 por segundo.
+
+        Substitui a interface ficar pedindo `/api/preview` em laco: uma conexao
+        so, e um evento apenas quando o quadro muda. Junto vai a leitura das
+        fontes ligadas, para os medidores de audio e tela.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        a = self.app
+        last = None
+        last_beat = 0.0
+        while True:
+            now = time.time()
+            r = a.renderer
+            h = a.preview_hex()
+            if h != last or now - last_beat >= 1.0:
+                last, last_beat = h, now
+                msg = {"h": h,
+                       "fps": round(r.fps_actual, 1) if r else 0,
+                       "src": a.live_sources()}
+                try:
+                    self.wfile.write(b"data: " + json.dumps(msg).encode("utf-8")
+                                     + b"\n\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionAbortedError,
+                        ConnectionResetError, OSError):
+                    return
+            time.sleep(1.0 / 30.0)
+
     def _static(self, rel: str):
         rel = rel.lstrip("/") or "index.html"
         if rel.startswith("assets/"):
@@ -81,8 +132,11 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/state":
             return self._json(a.state())
         if p == "/api/preview":
-            return self._json({"colors": a.preview(),
-                               "fps": round(a.renderer.fps_actual, 1) if a.renderer else 0})
+            return self._json({"hex": a.preview_hex(),
+                               "fps": round(a.renderer.fps_actual, 1) if a.renderer else 0,
+                               "src": a.live_sources()})
+        if p == "/api/stream":
+            return self._stream()
         if p == "/api/catalog":
             return self._json(a.catalog())
         if p == "/api/audio-devices":
@@ -101,10 +155,13 @@ class Handler(BaseHTTPRequestHandler):
         """Responde as rotas que mudam estado do app."""
         p = self.path.split("?", 1)[0]
         a = self.app
+        if self._foreign():
+            return self._json({"error": "origem nao permitida"}, 403)
         b = self._body()
         try:
             if p == "/api/layers":
-                a.set_layers(b.get("layers", []))
+                a.set_layers(b.get("layers", []),
+                             b["preset"] if "preset" in b else "keep")
             elif p == "/api/layer/add":
                 return self._json(a.add_layer(b["effect"], **{
                     k: b[k] for k in ("params", "blend", "opacity", "targets", "name")
@@ -150,6 +207,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(a.probe_isolate(
                     b["device"], int(b["zone"]), int(b["start"]),
                     int(b["count"]), b.get("color", "#ffffff")))
+            elif p == "/api/zone/identify":
+                return self._json(a.identify_zone(
+                    b["device"], int(b["zone"]),
+                    float(b.get("seconds", 1.6)), b.get("color", "#ffffff")))
             elif p == "/api/zone/plan":
                 return self._json(a.set_zone_plan(b["device"], int(b["zone"]),
                                                   b.get("parts", [])))
