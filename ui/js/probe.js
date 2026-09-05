@@ -138,6 +138,12 @@ function stepInventory(box) {
     isso para <b>calcular</b> o tamanho de cada peca em vez de perguntar, e para
     montar o mapa fisico sozinho.</p>`);
 
+  box.insertAdjacentHTML("beforeend", `
+    <div class="inv-cols">
+      <span>Peca</span><span>Tipo</span><span>Quantas</span>
+      <span>Laminas</span><span>Onde fica</span><span></span>
+    </div>`);
+
   const list = document.createElement("div");
   list.className = "inv-list";
   const spots = (S.catalog && S.catalog.spots) || [];
@@ -199,6 +205,7 @@ function stepInventory(box) {
   box.appendChild(add);
 
   nav(box, "Cancelar", () => closeWizard(false), "Comecar a contagem", () => {
+    saveInventory();
     W.step = 1;
     W.round = 0;
     renderStep();
@@ -241,10 +248,9 @@ function stepCount(box) {
 
   const grid = document.createElement("div");
   grid.className = "seen-grid";
-  W.seen = new Set();
   for (const z of left) {
     const b = document.createElement("button");
-    b.className = "seen";
+    b.className = "seen" + (W.seen.has(zoneKey(z)) ? " on" : "");
     b.style.setProperty("--c", z.color);
     b.innerHTML = `<span class="dot"></span>
       <span class="nm">${esc(z.name)}</span>
@@ -264,9 +270,11 @@ function stepCount(box) {
 
   nav(box, "Voltar", () => { W.step = 0; renderStep(); },
       "Responder", async () => {
+        const vistos = new Set(W.seen);
+        W.seen = new Set();
         for (const z of left) {
           const m = midOf(z);
-          if (W.seen.has(zoneKey(z))) z.lo = m; else z.hi = m - 1;
+          if (vistos.has(zoneKey(z))) z.lo = m; else z.hi = m - 1;
           if (z.hi < 1) { z.empty = true; z.count = 0; }
           else if (z.lo >= z.hi) z.count = z.lo;
         }
@@ -341,7 +349,7 @@ function stepVerify(box) {
     b.addEventListener("click", () => setN(z.count + parseInt(b.dataset.d, 10))));
   $("#vfMax", ctrl).addEventListener("click", () => {
     lightVerify(z, PROBE_MAX);
-    toast("Acendi 120. Se acendeu mais coisa, suba o numero ate igualar.");
+    toast(`Acendi ${PROBE_MAX}. Se acendeu mais coisa, suba o numero ate igualar.`);
   });
 
   box.insertAdjacentHTML("beforeend",
@@ -462,18 +470,10 @@ async function previewSplit(z, items) {
   const key = zoneKey(z);
   const sizes = items.flatMap((it) => Array(it.pieces).fill(W.perPiece[key + "|" + it.id] || 0));
   if (!sizes.length) return;
-  const uniform = sizes.every((s) => s === sizes[0]);
-  if (uniform) {
-    await API.post("/api/probe/split", {
-      device: z.device, zone: z.zone, size: sizes[0],
-      total: Math.min(z.count, sizes.reduce((a, b) => a + b, 0)),
-    }).catch(() => {});
-  } else {
-    await API.post("/api/probe/split", {
-      device: z.device, zone: z.zone, size: Math.max(1, sizes[0]),
-      total: Math.min(z.count, sizes.reduce((a, b) => a + b, 0)),
-    }).catch(() => {});
-  }
+  await API.post("/api/probe/split", {
+    device: z.device, zone: z.zone, size: Math.max(1, sizes[0]),
+    total: Math.min(z.count, sizes.reduce((a, b) => a + b, 0)),
+  }).catch(() => {});
 }
 
 function stepSplit(box) {
@@ -608,9 +608,17 @@ async function applyAll() {
   if ($("#tab-layout").classList.contains("active")) drawLayout();
 }
 
+function sairDoAssistente() {
+  if (W.step > 0 && !confirm(
+      "Sair do assistente? As contagens descobertas ate aqui sao descartadas.")) {
+    return;
+  }
+  closeWizard(false);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
-  $("#probeCancel").addEventListener("click", () => closeWizard(false));
+  $("#probeCancel").addEventListener("click", sairDoAssistente);
   $("#probeModal").addEventListener("click", (e) => {
-    if (e.target.id === "probeModal") closeWizard(false);
+    if (e.target.id === "probeModal") sairDoAssistente();
   });
 });
