@@ -1440,6 +1440,15 @@ function renderDevices() {
     }
     box.appendChild(el);
   }
+
+  // Quem tem uma peca que nao esta nesta lista fica sem explicacao nenhuma:
+  // a ausencia nao gera erro, o hardware simplesmente nao existe para o app.
+  box.insertAdjacentHTML("beforeend",
+    `<p class="hint muted">Aparece aqui so o que o OpenRGB tem driver para
+     controlar. Peca que nao esta na lista nao tem suporte no OpenRGB, e o
+     Prism nao alcanca ela: o app fala com o hardware exclusivamente por ele.
+     Teclado e mouse de fabricante com protocolo fechado sao os casos mais
+     comuns.</p>`);
 }
 
 $("#btnReconnect").addEventListener("click", async (e) => {
