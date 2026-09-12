@@ -19,10 +19,15 @@ de id na frente, na interface vendor:
     b5  R    b6  G    b7  B
     b8  checksum, 0xFF menos a soma dos bytes anteriores
 
-O teclado nao aceita cor por LED em fluxo: a camada personalizada dele e
-gravada, com botao proprio no driver oficial, e escrever a 60 quadros por
-segundo desgastaria a memoria. Por isso aqui so existe cor unica, e com
-limite de taxa.
+Existe tambem a camada de cor por tecla, comando 0x0C, em sete pacotes
+que somam 126 LEDs em RGB.
+
+O que este teclado nao tem e fluxo. O controlador reaplica a iluminacao a
+cada comando recebido, e isso aparece como um piscar em qualquer taxa,
+testado de 8 a 207 quadros por segundo. O driver web do proprio fabricante
+tambem nao transmite: arrastar o pincel pelas teclas nao manda um byte, e
+so a confirmacao escreve. Entao cor por tecla aqui e imagem parada, refeita
+quando a cena muda, e nao animacao.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ USAGE = 0x02
 CMD_LUZ = 0x07
 CMD_CAMADA = 0x0C
 EFEITO_COR_FIXA = 0x01
+EFEITO_PERSONALIZADO = 0x0D
 MODO_COR_UNICA = 0x04
 BRILHO_MAX = 4
 
@@ -67,7 +73,9 @@ TECLAS = {
 # O teclado grava configuracao, entao mesmo sem o modo de gravacao
 # explicito nao se escreve nele a cada quadro.
 INTERVALO_MIN = 1.0 / 8.0
-DELTA_MIN = 6
+# Baixo de proposito: quem acompanha uma cena manda cor ja suavizada, em
+# passos pequenos, e um limiar alto engoliria a transicao inteira.
+DELTA_MIN = 3
 
 _setupapi = ctypes.WinDLL("setupapi")
 _hid = ctypes.WinDLL("hid")
@@ -250,6 +258,45 @@ def pacotes_camada(cores: dict) -> list:
     return saida
 
 
+class _ZonaTeclado:
+    """Zona unica do teclado, no formato que o canvas espera."""
+
+    def __init__(self):
+        self.index = 0
+        self.name = "Teclas"
+        self.leds_count = LEDS
+        self.type = 2
+        self.leds_min = self.leds_max = LEDS
+        self.matrix_width = COLUNAS
+        self.matrix_height = LINHAS
+
+
+class DispositivoTeclado:
+    """Faz o teclado parecer um dispositivo para o motor de efeitos.
+
+    Ele nao fala o protocolo do OpenRGB e nunca entra na lista que o
+    renderizador empurra por la. Existe para que os efeitos tenham onde
+    pintar: uma matriz de 21 por 6 com coordenadas proprias, igual a
+    qualquer outra peca do gabinete.
+    """
+
+    index = 0
+    name = "Akko TAC75 HE"
+    type_name = "Keyboard"
+    serial = "akko-tac75he"
+    location = ""
+
+    def __init__(self):
+        self.zones = [_ZonaTeclado()]
+        self.led_count = LEDS
+
+
+GEOMETRIA = {
+    "shape": "grid", "x": 0.03, "y": 0.03, "w": 0.94, "h": 0.94,
+    "cols": COLUNAS, "rows": LINHAS,
+}
+
+
 class AkkoKeyboard:
     """Teclado Akko como destino de cor unica.
 
@@ -266,6 +313,7 @@ class AkkoKeyboard:
         self._lock = threading.Lock()
         self._ultima = None
         self._quando = 0.0
+        self._modo = None
         self.erro = None
 
     @property
@@ -320,29 +368,46 @@ class AkkoKeyboard:
             if self._h is None:
                 return False
             agora = time.monotonic()
-            cor = (int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF)
+            nivel = max(0, min(int(brilho), BRILHO_MAX))
+            # O brilho entra na comparacao porque o tom vai normalizado: a
+            # variacao de uma cena que so escurece mora ali, e comparar so
+            # o RGB faria o destino congelar.
+            estado = (int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF, nivel)
             if not forcar and self._ultima is not None:
                 if agora - self._quando < INTERVALO_MIN:
                     return False
-                if max(abs(a - c) for a, c in zip(self._ultima, cor)) < DELTA_MIN:
+                mudou_cor = max(abs(a - c) for a, c in
+                                zip(self._ultima[:3], estado[:3])) >= DELTA_MIN
+                if not mudou_cor and self._ultima[3] == nivel:
                     return False
             ok = self._envia(monta(EFEITO_COR_FIXA, MODO_COR_UNICA,
-                                   max(0, min(int(brilho), BRILHO_MAX)), 8,
-                                   *cor))
+                                   nivel, 8, *estado[:3]))
             if ok:
-                self._ultima, self._quando = cor, agora
+                self._ultima, self._quando = estado, agora
+                self._modo = EFEITO_COR_FIXA
             return ok
 
     def set_camada(self, cores: dict) -> bool:
-        """Grava a camada de cor por tecla e a exibe.
+        """Manda a camada de cor por tecla e a exibe.
 
-        Isto escreve na memoria do teclado, entao serve para destaque fixo,
-        tipo marcar WASD, e nunca para animacao. Quem quiser o teclado
-        seguindo a cena usa `set_cor`.
+        Antes dos dados vai o efeito personalizado: sem ele o controlador
+        fica alternando entre o efeito anterior e a camada, o que aparece
+        como piscar e como cor lavada.
+
+        Serve para imagem parada, nunca para animacao. O controlador
+        reaplica a camada a cada escrita e isso pisca de forma visivel em
+        qualquer taxa, do mesmo jeito que acontece com a cor unica. O
+        driver do proprio fabricante so escreve quando a pessoa manda.
         """
         with self._lock:
             if self._h is None:
                 return False
+            if self._modo != EFEITO_PERSONALIZADO:
+                if not self._envia(monta(EFEITO_PERSONALIZADO, MODO_COR_UNICA,
+                                         BRILHO_MAX, 0, 0, 0xC8, 0xC8)):
+                    return False
+                self._modo = EFEITO_PERSONALIZADO
+                time.sleep(0.05)
             for pacote in pacotes_camada(cores):
                 if not self._envia(pacote):
                     return False

@@ -189,13 +189,20 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
   protocolos USB proprietários e não documentados; sem um driver do OpenRGB
   para aquele device, o DBX Prism também não o alcança. A exceção é o teclado
   Akko, abaixo.
-- **Teclado Akko, por HID direto.** O OpenRGB não tem driver para a plataforma
-  Rongyuan RY5088 que a Akko revende, então esses teclados seriam invisíveis.
-  `prism/core/akko.py` fala HID com eles diretamente, e é a única parte do
-  projeto que não passa pelo OpenRGB. O protocolo foi obtido observando o
-  driver web oficial (`web.akkogear.com`). Dá cor única no teclado inteiro e
-  cor por tecla numa camada gravada; a camada fica na memória do teclado, então
-  serve para destaque fixo e não para animação. Use por `tools/akko.py`.
+- **Teclado Akko, por HID direto, e sem animação.** O OpenRGB não tem driver
+  para a plataforma Rongyuan RY5088 que a Akko revende, então esses teclados
+  seriam invisíveis. `prism/core/akko.py` fala HID com eles diretamente, e é a
+  única parte do projeto que não passa pelo OpenRGB. O protocolo foi obtido
+  observando o driver web oficial (`web.akkogear.com`).
+
+  O teclado entra no motor como uma matriz de 21×6 e os efeitos pintam nele de
+  verdade, mas o resultado é **uma imagem parada**, refeita a cada troca de
+  cena — não animação. O motivo é do firmware: o controlador reaplica a
+  iluminação a cada comando recebido, e isso aparece como um piscar em qualquer
+  taxa (testado de 8 a 207 quadros por segundo). O driver do próprio fabricante
+  também não transmite — arrastar o pincel pelas teclas não manda um byte, só a
+  confirmação escreve. `tools/akko.py` dá acesso direto a cor única e a
+  destaques fixos por tecla.
 - **Temperaturas de CPU/GPU são opcionais.** Dependem de
   `LibreHardwareMonitorLib.dll` em `vendor/` (não incluída — baixe em
   [github.com/LibreHardwareMonitor/LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)).

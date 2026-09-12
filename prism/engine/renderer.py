@@ -271,6 +271,49 @@ class Renderer:
                 self.last_error = str(exc)
                 raise
 
+    def cor_da_cena(self, frame: np.ndarray, niveis: int = 4) -> tuple:
+        """Resume o quadro em cor e brilho, para hardware de cor unica.
+
+        Devolve `(r, g, b, brilho)`, com o brilho na escala de `niveis` que
+        esse hardware costuma ter.
+
+        Duas decisoes moram aqui. A cor sai so do quarto mais claro do
+        quadro, porque a media pura de uma cena com poucos LEDs acesos
+        tende ao preto e apagaria o destino enquanto o gabinete brilha. E o
+        tom vai normalizado, com o canal mais forte no topo da escala,
+        deixando a intensidade por conta do campo de brilho: espremer as
+        duas coisas nos oito bits de cor daria um tom certo e escuro demais
+        para se enxergar.
+        """
+        preto = (0, 0, 0, 0)
+        if frame is None or len(frame) == 0:
+            return preto
+        lum = frame @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+        if float(lum.max()) <= 1e-4:
+            return preto
+
+        # O tom sai do LED mais claro, nao de uma media. Cena de duas cores
+        # tem media cinza: o Cross Over, que e ciano contra rosa, viraria
+        # branco e nao diria nada sobre o que esta na tela. O mais claro
+        # devolve uma cor que existe mesmo na cena.
+        tom_bruto = frame[int(np.argmax(lum))]
+        pico = float(tom_bruto.max())
+        if pico <= 1e-4:
+            return preto
+        tom = np.clip(tom_bruto / pico, 0.0, 1.0)
+
+        # A intensidade, essa sim, vem do conjunto: o quarto mais claro diz
+        # se a cena esta acesa ou quase apagada.
+        corte = float(np.quantile(lum, 0.75))
+        forte = lum[lum >= corte]
+        energia = min(1.0, float(forte.mean() if len(forte) else lum.mean())
+                      * float(self.settings["brightness"]))
+        brilho = int(round(energia ** 0.5 * niveis))
+        if brilho <= 0:
+            return preto
+        r, g, b = (int(round(v * 255.0)) for v in tom)
+        return (r, g, b, brilho)
+
     def blank(self):
         """Apaga tudo, engolindo erro de conexao por ser usado no encerramento."""
         if self.canvas is None or self.canvas.n == 0:

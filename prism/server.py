@@ -227,6 +227,15 @@ class Handler(BaseHTTPRequestHandler):
                     a.config["exclusive_mode"] = bool(b["enabled"])
                     a.save_config()
                 return self._json(a.enforce_exclusive())
+            elif p == "/api/teclado":
+                if "enabled" in b:
+                    a.config["akko_keyboard"] = bool(b["enabled"])
+                    a.save_config()
+                    if a.renderer:
+                        a._liga_teclado()
+                return self._json({"ok": True,
+                                   "teclado": a.teclado.to_json() if a.teclado
+                                   else None})
             elif p == "/api/elevacao/reparar":
                 return self._json(a.reparar_elevacao())
             elif p == "/api/reconnect":
