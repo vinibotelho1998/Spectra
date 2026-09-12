@@ -187,7 +187,15 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
   tornar isso rápido, não para eliminar a pergunta.
 - **Hardware sem suporte no OpenRGB não aparece.** Alguns fabricantes usam
   protocolos USB proprietários e não documentados; sem um driver do OpenRGB
-  para aquele device, o DBX Prism também não o alcança.
+  para aquele device, o DBX Prism também não o alcança. A exceção é o teclado
+  Akko, abaixo.
+- **Teclado Akko, por HID direto.** O OpenRGB não tem driver para a plataforma
+  Rongyuan RY5088 que a Akko revende, então esses teclados seriam invisíveis.
+  `prism/core/akko.py` fala HID com eles diretamente, e é a única parte do
+  projeto que não passa pelo OpenRGB. O protocolo foi obtido observando o
+  driver web oficial (`web.akkogear.com`). Dá cor única no teclado inteiro e
+  cor por tecla numa camada gravada; a camada fica na memória do teclado, então
+  serve para destaque fixo e não para animação. Use por `tools/akko.py`.
 - **Temperaturas de CPU/GPU são opcionais.** Dependem de
   `LibreHardwareMonitorLib.dll` em `vendor/` (não incluída — baixe em
   [github.com/LibreHardwareMonitor/LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)).
@@ -234,6 +242,7 @@ tools/uidev.py           sobe a interface com hardware falso, sem tocar nos LEDs
 tools/uicheck.py         abre a UI real e interroga o DOM por dentro
 tools/reconnect_test.py  derruba o OpenRGB e verifica a recuperação
 tools/dump.py             hexdump do blob de um controlador
+tools/akko.py            teclado Akko por HID direto, fora do OpenRGB
 ```
 
 ## Licença
