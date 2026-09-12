@@ -60,6 +60,7 @@ OPENRGB_CANDIDATES = [
     r"C:\Program Files (x86)\OpenRGB\OpenRGB.exe",
 ]
 OPENRGB_TASK = "DBX Prism - OpenRGB SDK Server"
+OPENRGB_ARGS = ["--server", "--startminimized"]
 
 CASE_SPOTS = {
     "topo_esq":     (0.22, 0.10), "topo_centro": (0.50, 0.10),
@@ -133,6 +134,8 @@ class PrismApp:
         self.connecting = False
         self._identify_until = 0.0
         self._identify_was_paused = False
+        self.elevacao = {}
+        self._reparando = False
 
     def _load_config(self) -> dict:
         base = {"layout": {}, "enabled_devices": {}, "zone_sizes": {},
@@ -161,41 +164,60 @@ class PrismApp:
                 json.dump(self.config, f, indent=2, ensure_ascii=False)
             os.replace(tmp, CONFIG_FILE)
 
+    def _openrgb_exe(self):
+        """Acha o executavel do OpenRGB instalado, ou None."""
+        return next((p for p in OPENRGB_CANDIDATES if os.path.isfile(p)), None)
+
+    def _start_openrgb(self) -> bool:
+        """Sobe o servidor, gastando o que puder para ele subir elevado.
+
+        A ordem importa. A tarefa agendada roda elevada sem aviso nenhum,
+        entao vem primeiro. Faltando a tarefa, ela e criada na hora, ao
+        preco de um unico aviso do controle de conta na vida da maquina.
+        So depois de tudo isso e que cai no executavel comum, que sobe sem
+        privilegio e deixa a memoria RAM invisivel.
+        """
+        from .core import admin
+
+        if admin.tarefa_existe(OPENRGB_TASK) and admin.rodar_tarefa(OPENRGB_TASK):
+            return True
+
+        exe = self._openrgb_exe()
+        if not exe:
+            self.status_msg = "OpenRGB nao encontrado"
+            return False
+
+        if self.config.get("elevar_openrgb", True):
+            r = admin.criar_tarefa(OPENRGB_TASK, exe, OPENRGB_ARGS)
+            if r == "ok" and admin.rodar_tarefa(OPENRGB_TASK):
+                return True
+            if r == "recusado":
+                self.config["elevar_openrgb"] = False
+                self.save_config()
+
+        try:
+            subprocess.Popen([exe] + OPENRGB_ARGS,
+                             creationflags=0x00000008 | 0x00000200,
+                             close_fds=True)
+        except Exception as exc:
+            self.status_msg = f"falha ao iniciar OpenRGB: {exc}"
+            return False
+        return True
+
     def ensure_openrgb(self, wait: float = 25.0) -> bool:
         """Garante que o servidor OpenRGB esteja no ar, subindo se preciso.
 
-        Prefere a tarefa agendada, que roda elevada: sem privilegio de
-        administrador o OpenRGB nao enxerga a memoria RAM nem parte dos
-        controladores. Cai para o executavel comum quando a tarefa nao existe.
+        Sem privilegio de administrador o OpenRGB nao abre o SMBus, e sem
+        SMBus ele nao enxerga a memoria RAM nem parte dos controladores da
+        placa-mae, entao `_start_openrgb` persegue o caminho elevado.
         """
         if _port_open(self.host, self.port):
             return True
         if not self.config.get("autostart_openrgb"):
             return False
         self.status_msg = "subindo o servidor OpenRGB"
-        started = False
-        try:
-            r = subprocess.run(
-                ["schtasks", "/run", "/tn", OPENRGB_TASK],
-                capture_output=True, timeout=10,
-                creationflags=0x08000000)
-            started = r.returncode == 0
-        except Exception:
-            started = False
-
-        if not started:
-            exe = next((p for p in OPENRGB_CANDIDATES if os.path.isfile(p)), None)
-            if not exe:
-                self.status_msg = "OpenRGB nao encontrado"
-                return False
-            try:
-                subprocess.Popen(
-                    [exe, "--server", "--startminimized"],
-                    creationflags=0x00000008 | 0x00000200,
-                    close_fds=True)
-            except Exception as exc:
-                self.status_msg = f"falha ao iniciar OpenRGB: {exc}"
-                return False
+        if not self._start_openrgb():
+            return False
         deadline = time.time() + wait
         while time.time() < deadline:
             if _port_open(self.host, self.port):
@@ -203,6 +225,89 @@ class PrismApp:
             time.sleep(0.5)
         self.status_msg = "OpenRGB nao respondeu a tempo"
         return False
+
+    def check_elevacao(self) -> dict:
+        """Apura se o servidor tem o privilegio que a memoria RAM exige.
+
+        Roda fora do laco de estado, porque consulta processo e agendador
+        do Windows. O resultado fica em `self.elevacao` e e de la que a
+        interface le.
+        """
+        from .core import admin
+        dram = [d for d in (self.renderer.all_devices if self.renderer else [])
+                if d.type_name == "DRAM"]
+        self.elevacao = {
+            "app_admin": admin.sou_admin(),
+            "servidor_elevado": admin.openrgb_elevado(),
+            "tarefa": admin.tarefa_existe(OPENRGB_TASK),
+            "pawnio": admin.pawnio_instalado(),
+            "openrgb": self._openrgb_exe(),
+            "dram": len(dram),
+            "recusado": not self.config.get("elevar_openrgb", True),
+        }
+        return self.elevacao
+
+    def reparar_elevacao(self) -> dict:
+        """Refaz o caminho elevado e reinicia o servidor OpenRGB.
+
+        E o que a interface aciona quando a memoria RAM nao aparece: cria a
+        tarefa agendada, derruba o servidor sem privilegio que estava no ar
+        e sobe outro no lugar, elevado, reconectando em seguida.
+
+        `_reparando` segura o vigia durante tudo isso: a queda de conexao
+        aqui e proposital, e sem a trava o vigia reconectaria no servidor
+        velho no meio da troca.
+        """
+        self._reparando = True
+        try:
+            return self._reparar_elevacao()
+        finally:
+            self._reparando = False
+
+    def _reparar_elevacao(self) -> dict:
+        from .core import admin
+        exe = self._openrgb_exe()
+        if not exe:
+            return {"ok": False, "erro": "OpenRGB nao encontrado"}
+
+        self.config["elevar_openrgb"] = True
+        if not admin.tarefa_existe(OPENRGB_TASK):
+            r = admin.criar_tarefa(OPENRGB_TASK, exe, OPENRGB_ARGS)
+            if r != "ok":
+                self.save_config()
+                return {"ok": False, "erro": (
+                    "o aviso de administrador foi recusado" if r == "recusado"
+                    else "nao consegui criar a tarefa agendada"),
+                    "elevacao": self.check_elevacao()}
+        self.save_config()
+
+        if self.renderer:
+            self.renderer.stop()
+        self.connected = False
+        self.client.close()
+        self.status_msg = "reiniciando o OpenRGB com privilegio"
+        admin.encerrar_openrgb()
+
+        deadline = time.time() + 10.0
+        while _port_open(self.host, self.port) and time.time() < deadline:
+            time.sleep(0.3)
+        if not admin.rodar_tarefa(OPENRGB_TASK):
+            return {"ok": False, "erro": "a tarefa agendada nao rodou",
+                    "elevacao": self.check_elevacao()}
+
+        deadline = time.time() + 30.0
+        while not _port_open(self.host, self.port) and time.time() < deadline:
+            time.sleep(0.5)
+
+        ok = self.connect()
+        elev = self.check_elevacao()
+        if ok and not elev["dram"]:
+            return {"ok": True, "aviso": (
+                "o servidor subiu elevado, mas nenhum pente de memoria RGB "
+                "apareceu" + ("" if elev["pawnio"] else
+                              ": o driver PawnIO nao esta instalado")),
+                "elevacao": elev}
+        return {"ok": ok, "elevacao": elev}
 
     def enforce_exclusive(self) -> dict:
         """Fecha os softwares de RGB concorrentes e relata o que caiu."""
@@ -257,6 +362,7 @@ class PrismApp:
         self.connected = True
         self.status_msg = "conectado"
         self._apply_zone_sizes(devices)
+        self.check_elevacao()
 
         settings = dict(self.config.get("settings") or {})
         settings["enabled_devices"] = self.config.get("enabled_devices") or {}
@@ -291,7 +397,9 @@ class PrismApp:
             r = self.renderer
             if r is None:
                 continue
-            if getattr(self, "_probe_session", None) is not None:
+            # o assistente de descoberta e o reparo de privilegio mexem na
+            # conexao de proposito; o vigia nao pode disputar com eles
+            if getattr(self, "_probe_session", None) is not None or self._reparando:
                 delay = 2.0
                 continue
             alive = bool(r._thread and r._thread.is_alive())
@@ -1010,6 +1118,7 @@ class PrismApp:
             "config_dir": CONFIG_DIR,
             "profiles": self.list_profiles(),
             "last_profile": self.config.get("last_profile"),
+            "elevacao": self.elevacao,
         }
         if not r:
             out["devices"] = []

@@ -193,9 +193,16 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
   [github.com/LibreHardwareMonitor/LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)).
   Sem ela, os efeitos de sensor funcionam com uso de CPU/RAM via `psutil`, e
   as temperaturas aparecem como indisponíveis — nunca inventadas.
-- **RAM, SSD e GPU via SMBus/I²C exigem o OpenRGB elevado.** `tools/setup-admin.ps1`
-  cria uma tarefa agendada que sobe o servidor com privilégio administrativo,
-  necessário para esse barramento.
+- **RAM, SSD e GPU via SMBus/I²C exigem o OpenRGB elevado.** Sem privilégio
+  administrativo o OpenRGB não abre o barramento (`Permission Denied, PawnIO
+  initialization aborted` no log dele) e os pentes de memória simplesmente não
+  aparecem na lista. O DBX Prism resolve isso sozinho: na primeira abertura
+  registra a tarefa agendada `DBX Prism - OpenRGB SDK Server`, com privilégio
+  máximo, e daí em diante sobe o servidor por ela — o aviso do controle de
+  conta aparece uma vez só. Se o servidor já estiver no ar sem privilégio, a
+  aba Hardware mostra o aviso com o botão **Corrigir**, que registra a tarefa e
+  reinicia o servidor elevado. O barramento também depende do driver
+  [PawnIO](https://pawnio.eu); faltando ele, o aviso diz isso.
 
 ## Empacotamento
 

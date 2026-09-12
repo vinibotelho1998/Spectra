@@ -1280,6 +1280,56 @@ $("#btnLiveLayout").addEventListener("click", (e) => {
 
 /* -------------------------------------------------------------- hardware */
 
+// O OpenRGB so abre o SMBus rodando como administrador, e e por ali que
+// passam os pentes de memoria RGB. Sem privilegio a RAM nao aparece na
+// lista e nada indica o motivo, entao o aviso precisa ser explicito.
+function avisoElevacao(st) {
+  const e = st.elevacao || {};
+  const semPriv = e.servidor_elevado === false;
+  const semDriver = e.servidor_elevado === true && !e.dram && !e.pawnio;
+  if (!semPriv && !semDriver) return null;
+
+  const el = document.createElement("div");
+  el.className = "device";
+  if (semDriver) {
+    el.innerHTML = `
+      <div class="device-head">
+        <span class="nm">Memoria RAM fora da lista</span>
+        <span class="tag err">driver ausente</span>
+      </div>
+      <p class="hint">O servidor OpenRGB esta rodando com privilegio, mas o driver
+       PawnIO nao esta instalado, e sem ele o barramento SMBus fica fechado.
+       Instale o PawnIO em <b>pawnio.eu</b> e reconecte.</p>`;
+    return el;
+  }
+
+  el.innerHTML = `
+    <div class="device-head">
+      <span class="nm">Memoria RAM fora da lista</span>
+      <span class="tag err">sem privilegio</span>
+    </div>
+    <p class="hint">O servidor OpenRGB subiu sem direitos de administrador, entao o
+     barramento SMBus ficou fechado e os pentes de memoria RGB nao foram
+     detectados. Corrigir cria uma tarefa agendada e reinicia o servidor
+     elevado: o aviso do controle de conta aparece uma vez so.</p>`;
+
+  const b = document.createElement("button");
+  b.className = "btn sm primary";
+  b.textContent = "Corrigir";
+  b.addEventListener("click", async () => {
+    b.classList.add("busy");
+    setStatus("busy", "reiniciando o OpenRGB elevado…");
+    try {
+      const r = await API.post("/api/elevacao/reparar");
+      toast(r.ok ? (r.aviso || "servidor elevado, RAM detectada") : r.erro, !r.ok);
+    } catch (err) { toast(err.message, true); }
+    b.classList.remove("busy");
+    refreshState();
+  });
+  el.querySelector(".device-head").appendChild(b);
+  return el;
+}
+
 function renderDevices() {
   const box = $("#deviceList");
   const info = $("#deviceInfo");
@@ -1306,6 +1356,9 @@ function renderDevices() {
     `<span><b>${st.canvas ? st.canvas.led_count : 0}</b> sob controle do Prism</span>` +
     (st.reconnects ? `<span><b>${st.reconnects}</b> reconexoes</span>` : "") +
     (semDirect ? `<span class="err">${semDirect} sem modo Direct</span>` : "");
+
+  const av = avisoElevacao(st);
+  if (av) box.appendChild(av);
 
   const enabled = st.enabled_devices || {};
   for (const d of devs) {

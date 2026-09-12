@@ -227,6 +227,8 @@ class Handler(BaseHTTPRequestHandler):
                     a.config["exclusive_mode"] = bool(b["enabled"])
                     a.save_config()
                 return self._json(a.enforce_exclusive())
+            elif p == "/api/elevacao/reparar":
+                return self._json(a.reparar_elevacao())
             elif p == "/api/reconnect":
                 return self._json({"ok": a.connect()})
             elif p == "/api/shutdown":
