@@ -137,6 +137,7 @@ class PrismApp:
         self.elevacao = {}
         self._reparando = False
         self.teclado = None
+        self.cor_teclado = (0, 0, 0)
 
     def _load_config(self) -> dict:
         base = {"layout": {}, "enabled_devices": {}, "zone_sizes": {},
@@ -228,54 +229,129 @@ class PrismApp:
         return False
 
     def _liga_teclado(self):
-        """Prepara o teclado Akko, se houver um e a configuracao pedir.
+        """Liga o teclado Akko na cena, se houver um e a configuracao pedir.
 
-        Ele nao entra no canvas nem no laco de render. O controlador
-        reaplica o efeito a cada comando recebido, e isso da um piscar
-        visivel: mandar cor a cada quadro transforma qualquer efeito em
-        estrobo. Entao a cor vai uma vez, quando a cena muda, que e o unico
-        regime em que esse hardware fica estavel.
+        Ele nao entra no canvas: nao fala o protocolo do OpenRGB e aceita
+        uma cor so de cada vez. Mas acompanha ao vivo, porque o firmware
+        tem um modo feito para receber cor do computador em fluxo. Os
+        outros dois caminhos, cor fixa e camada por tecla, reaplicam a
+        iluminacao a cada pacote e piscam; esse nao.
         """
         if not self.config.get("akko_keyboard", True):
+            if self.renderer:
+                self.renderer.ambiente = None
             return
         if self.teclado is None:
             from .core.akko import AkkoKeyboard
             self.teclado = AkkoKeyboard()
-        if not self.teclado.conectado:
-            self.teclado.abrir()
+        if not self.teclado.conectado and not self.teclado.abrir():
+            if self.renderer:
+                self.renderer.ambiente = None
+            return
 
-    def _renderizador_teclado(self):
-        """Motor auxiliar que avalia a cena na matriz do teclado.
+        from .core.akko import BRILHO_MAX
 
-        O teclado nao entra no canvas principal porque nao fala o protocolo
-        do OpenRGB e o laco de render empurraria quadro nele. Entao ele
-        ganha um renderizador proprio, com as mesmas camadas, avaliadas
-        numa grade de 21 por 6. Custa um quadro extra por troca de cena, o
-        que e nada perto dos sessenta por segundo do laco principal.
-        """
-        from .core.akko import DispositivoTeclado, GEOMETRIA
-        from .engine.canvas import device_key
+        escala = max(0.0, min(float(self.config.get("akko_brilho", 1.0)), 1.0))
+        # Quase sem media temporal. Ela entrou aqui para combater um
+        # piscar que, no fim, vinha de duas instancias do app disputando o
+        # teclado, e nao do canal. Mantida alta, ela corta o vale e o pico
+        # de qualquer efeito: a respiracao nao apaga nem satura.
+        constante = max(0.0, float(self.config.get("akko_suavizacao", 0.04)))
+        # Sem piso por padrao: o teclado acompanha a cena ate o preto, que
+        # e o que faz a respiracao parecer a mesma nos dois lugares. Quem
+        # quiser um minimo de luz sempre acesa levanta `akko_piso`.
+        piso = max(0.0, min(float(self.config.get("akko_piso", 0.0)), 1.0))
+        suave = {"cor": None, "quando": 0.0}
+        # Ganho automatico. Cada efeito tem o seu proprio teto de
+        # intensidade, e quase nenhum chega a saturar a media da faixa, so
+        # que o teclado tem 255 disponiveis de qualquer jeito. Guardando o
+        # pico recente, o momento mais claro da cena passa a valer brilho
+        # cheio. O teto cede devagar para uma cena que escurece de vez nao
+        # ficar presa num maximo antigo.
+        ganho = {"teto": 0.0}
+        CEDE = 0.2
+        aux = self._renderizador_teclado()
+        # Faixa estreita no meio da cena. A grade do teclado cobre o
+        # gabinete inteiro para desenhar a imagem por tecla; para a cor ao
+        # vivo isso e ruim, porque a onda atravessa a grade toda e a media
+        # volta a ficar parada. Amostrando so uma coluna de LEDs, a onda
+        # passa por ela e a cor realmente muda.
+        largura = max(0.02, min(float(self.config.get("akko_amostra", 0.09)),
+                                0.5))
+        faixa = np.abs(aux.canvas.x - 0.5) <= largura
+        if not faixa.any():
+            faixa = np.ones(aux.canvas.n, dtype=bool)
 
-        if getattr(self, "_render_teclado", None) is None:
-            dev = DispositivoTeclado()
-            layout = {device_key(dev): {"zones": {"0": dict(GEOMETRIA)}}}
-            self._render_teclado = Renderer(None, [dev], layout,
-                                            {"brightness": 1.0, "gamma": 1.0})
-        return self._render_teclado
+        def pinta(frame):
+            # O teclado e um lugar na cena, nao um resumo dela. Resumir nao
+            # funciona: onda que viaja tem energia total constante, entao a
+            # media do gabinete fica parada enquanto a luz anda. Avaliando o
+            # efeito na propria area do teclado, a onda passa por ele e a
+            # cor muda de verdade.
+            with self._lock:
+                if self.renderer is None:
+                    return
+                aux.ctx.t = self.renderer.ctx.t
+                aux.settings["brightness"] = self.renderer.settings["brightness"]
+            quadro = aux.render_once(1.0 / 60.0)
+            # Media simples da faixa, sem procurar tom dominante. Numa
+            # faixa estreita a media ja e uma cor que existe na cena, e
+            # varia de forma continua; o agrupamento por matiz, que serve
+            # para resumir a cena inteira, aqui so faria a cor saltar de
+            # grupo em grupo enquanto a onda passa.
+            media = quadro[faixa].mean(axis=0)
+            pico = float(media.max())
+            if pico <= 1e-4:
+                cru = (0.0, 0.0, 0.0)
+            else:
+                # O tom vai cheio e a intensidade entra com piso, senao a
+                # cena escura apaga o teclado e a clara satura tudo.
+                tom = media / pico
+                # Resposta linear. Uma curva de expoente menor que um
+                # levantaria o fundo e o teclado nunca apagaria, enquanto o
+                # gabinete apaga: a respiracao ficaria diferente nos dois.
+                ganho["teto"] = max(pico, ganho["teto"] * (1.0 - CEDE / 60.0))
+                rel = pico / ganho["teto"] if ganho["teto"] > 1e-4 else 0.0
+                # Mesma gama do gabinete. Sem isso a rampa tem formato
+                # diferente nos dois lugares: o teclado passa tempo demais
+                # na parte clara e a subida nao bate com a do gabinete.
+                g = float(self.renderer.settings.get("gamma", 2.2))
+                forca = min(rel, 1.0) ** g if g and abs(g - 1.0) > 1e-3                     else min(rel, 1.0)
+                k = (piso + (1.0 - piso) * forca) * escala * 255.0
+                cru = tuple(float(v) * k for v in tom)
 
-    def atualiza_teclado(self, atraso: float = 0.8):
-        """Pinta no teclado a imagem da cena atual, uma vez so.
+            agora = time.monotonic()
+            if suave["cor"] is None:
+                suave["cor"] = list(cru)
+            else:
+                passo = (1.0 if constante <= 1e-6
+                         else min((agora - suave["quando"]) / constante, 1.0))
+                suave["cor"] = [c + (a - c) * passo
+                                for c, a in zip(suave["cor"], cru)]
+            suave["quando"] = agora
+            cor = tuple(int(round(v)) for v in suave["cor"])
+            self.cor_teclado = cor
+            self.teclado.cor_em_fluxo(*cor)
 
-        O controlador reaplica a camada a cada escrita e isso pisca, entao
-        animar por tecla esta fora de questao neste hardware: o driver do
-        proprio fabricante tambem so escreve quando a pessoa manda. O que
-        da para fazer, e o que se faz aqui, e mostrar o desenho do efeito
-        nas teclas e refazer quando a cena mudar.
+        self.renderer.ambiente = pinta
+        self._sincroniza_aux()
 
-        Espera um instante antes de olhar, porque efeito recem aplicado
-        ainda esta no primeiro instante dele. Chamadas seguidas se
-        cancelam, para trocar de preset tres vezes nao render tres
-        escritas.
+    def _sincroniza_aux(self):
+        """Copia as camadas da cena para o motor auxiliar do teclado."""
+        aux = getattr(self, "_render_teclado", None)
+        if aux is None or self.renderer is None:
+            return
+        with self._lock:
+            aux.set_layers([Layer.from_json(l.to_json())
+                            for l in self.renderer.layers])
+
+    def imagem_no_teclado(self, atraso: float = 0.8):
+        """Desenha a cena nas teclas, como imagem parada.
+
+        Alternativa ao acompanhamento ao vivo, para quem prefere ver o
+        desenho do efeito espalhado pelo teclado em vez de uma cor so. Nao
+        anima: a camada por tecla reaplica a iluminacao a cada escrita e
+        isso pisca, entao ela e refeita apenas quando a cena muda.
         """
         if not self.teclado or not self.teclado.conectado:
             return
@@ -305,6 +381,18 @@ class PrismApp:
         t.daemon = True
         self._timer_teclado = t
         t.start()
+
+    def _renderizador_teclado(self):
+        """Motor auxiliar que avalia a cena na matriz do teclado."""
+        from .core.akko import DispositivoTeclado, GEOMETRIA
+        from .engine.canvas import device_key
+
+        if getattr(self, "_render_teclado", None) is None:
+            dev = DispositivoTeclado()
+            layout = {device_key(dev): {"zones": {"0": dict(GEOMETRIA)}}}
+            self._render_teclado = Renderer(None, [dev], layout,
+                                            {"brightness": 1.0, "gamma": 1.0})
+        return self._render_teclado
 
     def check_elevacao(self) -> dict:
         """Apura se o servidor tem o privilegio que a memoria RAM exige.
@@ -459,8 +547,8 @@ class PrismApp:
         self.renderer.arm_direct()
         self._liga_teclado()
         self.renderer.start()
-        self.atualiza_teclado(1.5)
         self._sync_sources()
+        self._sincroniza_aux()
         self.start_watchdog()
         return True
 
@@ -611,7 +699,7 @@ class PrismApp:
                 self.config["last_preset"] = preset
                 self.save_config()
             self._sync_sources()
-        self.atualiza_teclado()
+            self._sincroniza_aux()
 
     def add_layer(self, effect_id: str, **kw):
         """Acrescenta uma camada com o efeito pedido."""
@@ -622,6 +710,7 @@ class PrismApp:
                           kw.get("name") or (d.label if d else effect_id))
             self.renderer.add_layer(layer)
             self._sync_sources()
+            self._sincroniza_aux()
             return layer.to_json()
 
     def update_layer(self, layer_id: str, patch: dict):
@@ -644,6 +733,7 @@ class PrismApp:
                 layer.targets = list(patch["targets"] or [])
                 layer._mask_key = None
             self._sync_sources()
+            self._sincroniza_aux()
             return layer.to_json()
 
     def remove_layer(self, layer_id: str):
@@ -651,6 +741,7 @@ class PrismApp:
         with self._lock:
             self.renderer.remove_layer(layer_id)
             self._sync_sources()
+            self._sincroniza_aux()
 
     def reorder_layers(self, order):
         """Reordena as camadas conforme a lista de ids."""
@@ -905,6 +996,7 @@ class PrismApp:
             elif kind == "screen":
                 self.screen = None
             self._sync_sources()
+            self._sincroniza_aux()
 
     def apply_preset(self, preset_id: str):
         """Carrega uma cena pronta pelo id."""
@@ -915,8 +1007,8 @@ class PrismApp:
             self.renderer.load_scene(p.scene())
             self.config["last_preset"] = preset_id
             self._sync_sources()
+            self._sincroniza_aux()
             self.save_config()
-        self.atualiza_teclado()
         return {"ok": True, "name": p.name, "needs": list(p.needs)}
 
     def setup_todo(self) -> list:
@@ -1176,6 +1268,7 @@ class PrismApp:
             self.config["last_profile"] = name
             self.save_config()
         self._sync_sources()
+        self._sincroniza_aux()
         return True
 
     def delete_profile(self, name: str):

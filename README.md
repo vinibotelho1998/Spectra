@@ -189,20 +189,26 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
   protocolos USB proprietários e não documentados; sem um driver do OpenRGB
   para aquele device, o DBX Prism também não o alcança. A exceção é o teclado
   Akko, abaixo.
-- **Teclado Akko, por HID direto, e sem animação.** O OpenRGB não tem driver
-  para a plataforma Rongyuan RY5088 que a Akko revende, então esses teclados
-  seriam invisíveis. `prism/core/akko.py` fala HID com eles diretamente, e é a
-  única parte do projeto que não passa pelo OpenRGB. O protocolo foi obtido
-  observando o driver web oficial (`web.akkogear.com`).
+- **Teclado Akko, por HID direto.** O OpenRGB não tem driver para a plataforma
+  Rongyuan RY5088 que a Akko revende, então esses teclados seriam invisíveis.
+  `prism/core/akko.py` fala HID com eles diretamente, e é a única parte do
+  projeto que não passa pelo OpenRGB.
 
-  O teclado entra no motor como uma matriz de 21×6 e os efeitos pintam nele de
-  verdade, mas o resultado é **uma imagem parada**, refeita a cada troca de
-  cena — não animação. O motivo é do firmware: o controlador reaplica a
-  iluminação a cada comando recebido, e isso aparece como um piscar em qualquer
-  taxa (testado de 8 a 207 quadros por segundo). O driver do próprio fabricante
-  também não transmite — arrastar o pincel pelas teclas não manda um byte, só a
-  confirmação escreve. `tools/akko.py` dá acesso direto a cor única e a
-  destaques fixos por tecla.
+  O teclado **acompanha a cena ao vivo**, com a cor dominante do efeito, a 60
+  quadros por segundo. Isso usa o modo 21 do firmware, *Screen Sync*,
+  alimentado pelo comando `0x0E` — o único canal do aparelho que aceita fluxo
+  contínuo. Os outros dois, cor fixa (`0x07`) e camada por tecla (`0x0C`),
+  reaplicam a iluminação a cada pacote e piscam de forma visível em qualquer
+  taxa, de 8 a 207 quadros por segundo; o driver web do próprio fabricante
+  também não transmite por eles.
+
+  Cor por tecla existe, mas só como imagem parada (`PrismApp.imagem_no_teclado`),
+  e serve para destaque fixo — `tools/akko.py wasd` marca WASD e as setas, e
+  sobrevive a desligar o PC. Animação por tecla exigiria firmware modificado.
+
+  O formato do comando de fluxo e o mapa de comandos vieram da documentação do
+  [monsgeek-akko-linux](https://github.com/echtzeit-solutions/monsgeek-akko-linux),
+  que reverteu essa mesma família de teclados.
 - **Temperaturas de CPU/GPU são opcionais.** Dependem de
   `LibreHardwareMonitorLib.dll` em `vendor/` (não incluída — baixe em
   [github.com/LibreHardwareMonitor/LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)).

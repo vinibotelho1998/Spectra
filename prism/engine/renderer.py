@@ -136,6 +136,10 @@ class Renderer:
         self.last_error = None
         self.connection_lost = False
         self.direct_ok: dict[int, bool] = {}
+        # Destino fora do canvas, para hardware que nao fala o protocolo do
+        # OpenRGB e acompanha a cena com uma cor so. Recebe o quadro pronto;
+        # erro ali desliga o destino em vez de derrubar o laco.
+        self.ambiente = None
         self.rebuild()
 
     def rebuild(self):
@@ -277,13 +281,15 @@ class Renderer:
         Devolve `(r, g, b, brilho)`, com o brilho na escala de `niveis` que
         esse hardware costuma ter.
 
-        Duas decisoes moram aqui. A cor sai so do quarto mais claro do
-        quadro, porque a media pura de uma cena com poucos LEDs acesos
-        tende ao preto e apagaria o destino enquanto o gabinete brilha. E o
-        tom vai normalizado, com o canal mais forte no topo da escala,
-        deixando a intensidade por conta do campo de brilho: espremer as
-        duas coisas nos oito bits de cor daria um tom certo e escuro demais
-        para se enxergar.
+        A cor e o tom dominante, achado por histograma de matiz entre os
+        LEDs mais claros. Isso porque as duas saidas obvias erram, cada uma
+        do seu jeito: a media de uma cena de duas cores da cinza, e o fogo
+        vira branco porque o ponto mais quente da chama e palido. O tom que
+        ocupa mais LEDs e o que a pessoa chamaria de "a cor da cena".
+
+        O tom vai normalizado, com o canal mais forte no topo da escala, e
+        a intensidade fica por conta do brilho: espremer as duas coisas nos
+        oito bits daria cor certa e escura demais para se enxergar.
         """
         preto = (0, 0, 0, 0)
         if frame is None or len(frame) == 0:
@@ -292,27 +298,53 @@ class Renderer:
         if float(lum.max()) <= 1e-4:
             return preto
 
-        # O tom sai do LED mais claro, nao de uma media. Cena de duas cores
-        # tem media cinza: o Cross Over, que e ciano contra rosa, viraria
-        # branco e nao diria nada sobre o que esta na tela. O mais claro
-        # devolve uma cor que existe mesmo na cena.
-        tom_bruto = frame[int(np.argmax(lum))]
-        pico = float(tom_bruto.max())
+        corte = float(np.quantile(lum, 0.75))
+        sel = frame[lum >= corte] if corte > 1e-3 else frame
+        if len(sel) == 0:
+            sel = frame
+        peso = sel @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+
+        mx = sel.max(axis=1)
+        mn = sel.min(axis=1)
+        delta = mx - mn
+        seguro = np.where(delta > 1e-6, delta, 1.0)
+        r, g, b = sel[:, 0], sel[:, 1], sel[:, 2]
+        matiz = np.where(
+            mx == r, ((g - b) / seguro) % 6.0,
+            np.where(mx == g, (b - r) / seguro + 2.0, (r - g) / seguro + 4.0))
+        matiz = (matiz / 6.0) % 1.0
+
+        # Cinza nao tem matiz confiavel, entao pesa pela saturacao tambem:
+        # senao um fundo lavado decidiria a cor no lugar da chama.
+        sat = np.where(mx > 1e-6, delta / np.where(mx > 1e-6, mx, 1.0), 0.0)
+        w = peso * (0.15 + 0.85 * sat)
+
+        FAIXAS = 12
+        caixa = np.minimum((matiz * FAIXAS).astype(np.int32), FAIXAS - 1)
+        soma = np.bincount(caixa, weights=w, minlength=FAIXAS)
+        if soma.sum() <= 1e-6:
+            dom = np.ones(len(sel), dtype=bool)
+        else:
+            melhor = int(np.argmax(soma))
+            vizinhas = {(melhor - 1) % FAIXAS, melhor, (melhor + 1) % FAIXAS}
+            dom = np.isin(caixa, list(vizinhas))
+            if not dom.any():
+                dom = caixa == melhor
+
+        media = np.average(sel[dom], axis=0, weights=np.maximum(w[dom], 1e-6))
+        pico = float(media.max())
         if pico <= 1e-4:
             return preto
-        tom = np.clip(tom_bruto / pico, 0.0, 1.0)
+        tom = np.clip(media / pico, 0.0, 1.0)
 
-        # A intensidade, essa sim, vem do conjunto: o quarto mais claro diz
-        # se a cena esta acesa ou quase apagada.
-        corte = float(np.quantile(lum, 0.75))
         forte = lum[lum >= corte]
         energia = min(1.0, float(forte.mean() if len(forte) else lum.mean())
                       * float(self.settings["brightness"]))
         brilho = int(round(energia ** 0.5 * niveis))
         if brilho <= 0:
             return preto
-        r, g, b = (int(round(v * 255.0)) for v in tom)
-        return (r, g, b, brilho)
+        rr, gg, bb = (int(round(v * 255.0)) for v in tom)
+        return (rr, gg, bb, brilho)
 
     def blank(self):
         """Apaga tudo, engolindo erro de conexao por ser usado no encerramento."""
@@ -366,6 +398,12 @@ class Renderer:
                     self.connection_lost = True
                     self._stop.set()
                     break
+                if self.ambiente is not None:
+                    try:
+                        self.ambiente(frame)
+                    except Exception as exc:
+                        self.last_error = f"ambiente: {exc}"
+                        self.ambiente = None
 
             acc_frames += 1
             acc_time += dt

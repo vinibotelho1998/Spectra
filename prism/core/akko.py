@@ -44,10 +44,19 @@ USAGE = 0x02
 
 CMD_LUZ = 0x07
 CMD_CAMADA = 0x0C
+CMD_COR_TELA = 0x0E
 EFEITO_COR_FIXA = 0x01
 EFEITO_PERSONALIZADO = 0x0D
+EFEITO_SINCRONIA_TELA = 21
 MODO_COR_UNICA = 0x04
 BRILHO_MAX = 4
+
+# O firmware tem um modo feito para receber cor do computador em fluxo, o
+# 21, alimentado pelo comando 0x0E. Ele nao reaplica a iluminacao a cada
+# pacote, entao aceita atualizacao continua sem piscar, ao contrario do
+# 0x07 e do 0x0C. O driver web da Akko nao expoe esse modo; o formato vem
+# da documentacao do projeto monsgeek-akko-linux, que prevê 50 Hz.
+FLUXO_HZ = 50
 
 # A matriz de LED tem 21 colunas de 6 linhas, e o indice anda pela coluna:
 # W e S sao 14 e 15, vizinhos verticais. Descoberto pintando tecla por
@@ -221,6 +230,13 @@ def monta(efeito: int, modo_cor: int, brilho: int, velocidade: int,
     return bytes(carga + [ck] + [0] * (64 - len(carga) - 1))
 
 
+def monta_cor_tela(r: int, g: int, b: int) -> bytes:
+    """Monta o relatorio de cor em fluxo do modo de sincronia com a tela."""
+    carga = [CMD_COR_TELA, int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF, 0, 0, 0]
+    ck = (0xFF - (sum(carga) & 0xFF)) & 0xFF
+    return bytes(carga + [ck] + [0] * (64 - len(carga) - 1))
+
+
 def pacotes_camada(cores: dict) -> list:
     """Fatia a camada de cor por tecla nos relatorios que o teclado espera.
 
@@ -386,6 +402,33 @@ class AkkoKeyboard:
                 self._ultima, self._quando = estado, agora
                 self._modo = EFEITO_COR_FIXA
             return ok
+
+    def cor_em_fluxo(self, r: int, g: int, b: int) -> bool:
+        """Manda uma cor pelo canal de fluxo, para acompanhar a cena ao vivo.
+
+        Entra no modo de sincronia com a tela na primeira chamada. Esse e o
+        unico caminho deste teclado que aceita atualizacao continua: tanto o
+        efeito de cor fixa quanto a camada por tecla reaplicam a iluminacao
+        a cada pacote e piscam de forma visivel, em qualquer taxa.
+
+        Limitado a `FLUXO_HZ`, que e a taxa que o firmware espera. Mandar
+        mais rapido que isso, tipo acompanhar um laco de 60 quadros por
+        segundo, atropela o controlador e volta a aparecer como piscar.
+        """
+        with self._lock:
+            if self._h is None:
+                return False
+            agora = time.monotonic()
+            if agora - self._quando < 1.0 / FLUXO_HZ:
+                return False
+            self._quando = agora
+            if self._modo != EFEITO_SINCRONIA_TELA:
+                if not self._envia(monta(EFEITO_SINCRONIA_TELA, MODO_COR_UNICA,
+                                         BRILHO_MAX, 0, 255, 255, 255)):
+                    return False
+                self._modo = EFEITO_SINCRONIA_TELA
+                time.sleep(0.05)
+            return self._envia(monta_cor_tela(r, g, b))
 
     def set_camada(self, cores: dict) -> bool:
         """Manda a camada de cor por tecla e a exibe.
