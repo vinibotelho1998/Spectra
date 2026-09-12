@@ -1330,6 +1330,37 @@ function avisoElevacao(st) {
   return el;
 }
 
+// O teclado Akko nao vem do OpenRGB, entao nao aparece na lista normal de
+// dispositivos. Sem um cartao proprio ele seria invisivel na interface,
+// mesmo estando aceso na mesa.
+function cartaoTeclado(st) {
+  const t = st.teclado;
+  if (!t) return null;
+
+  const el = document.createElement("div");
+  el.className = "device" + (t.connected ? "" : " disabled");
+  el.innerHTML = `
+    <div class="device-head">
+      <span class="nm">${esc(t.name)}</span>
+      <span class="tag">Teclado</span>
+      ${t.connected ? `<span class="tag ok">HID direto</span>`
+                    : `<span class="tag err">sem conexao</span>`}
+      <span class="spacer"></span>
+    </div>
+    <p class="hint">Fora do OpenRGB, que nao tem driver para ele. Os efeitos
+     desenham nas teclas, mas como imagem parada que se refaz a cada troca de
+     cena: o controlador reaplica a luz a cada comando e animar faria ele
+     piscar.${t.error ? " <b>" + esc(t.error) + "</b>" : ""}</p>`;
+
+  const sw = switchEl("Controlar pelo Prism", st.akko_keyboard !== false,
+    async (v) => {
+      await API.post("/api/teclado", { enabled: v });
+      refreshState();
+    });
+  el.querySelector(".device-head").appendChild(sw.querySelector(".switch"));
+  return el;
+}
+
 function renderDevices() {
   const box = $("#deviceList");
   const info = $("#deviceInfo");
@@ -1359,6 +1390,9 @@ function renderDevices() {
 
   const av = avisoElevacao(st);
   if (av) box.appendChild(av);
+
+  const tec = cartaoTeclado(st);
+  if (tec) box.appendChild(tec);
 
   const enabled = st.enabled_devices || {};
   for (const d of devs) {

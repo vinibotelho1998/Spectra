@@ -1211,6 +1211,7 @@ class PrismApp:
             "last_profile": self.config.get("last_profile"),
             "elevacao": self.elevacao,
             "teclado": (self.teclado.to_json() if self.teclado else None),
+            "akko_keyboard": self.config.get("akko_keyboard", True),
         }
         if not r:
             out["devices"] = []
