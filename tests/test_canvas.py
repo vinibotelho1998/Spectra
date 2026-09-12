@@ -244,6 +244,20 @@ class TestCanvas:
                 assert canvas.piece01[start] == pytest.approx(0.0)
                 assert canvas.piece01[start + count - 1] == pytest.approx(1.0)
 
+    def test_peca_de_um_led_usa_a_posicao_como_coordenada_local(self, canvas):
+        # Sem isso todas as pecas de um LED ficariam com u=0 e v=0.5, com a
+        # mesma fase, e os efeitos de peca as fariam piscar juntas fora do
+        # compasso do resto do gabinete.
+        for start, count in canvas.pieces:
+            if count == 1:
+                assert canvas.piece_u[start] == pytest.approx(canvas.x[start])
+                assert canvas.piece_v[start] == pytest.approx(canvas.y[start])
+
+    def test_pecas_de_um_led_nao_compartilham_fase(self, canvas):
+        solos = [start for start, count in canvas.pieces if count == 1]
+        assert len(solos) > 1
+        assert len({round(float(canvas.piece_u[s]), 4) for s in solos}) > 1
+
     def test_pecas_cobrem_o_canvas_inteiro(self, canvas):
         assert sum(c for _s, c in canvas.pieces) == canvas.n
 

@@ -371,6 +371,17 @@ class Canvas:
                 pv[start:start + count] = lane / max(lanes - 1, 1)
                 plane[start:start + count] = lane
                 planes[start:start + count] = lanes
+            elif count == 1:
+                # Peca de um LED nao tem comprimento, entao nao existe
+                # coordenada local pra ela. Zerar todas, que era o que
+                # acontecia, deixa o LED do mouse, o do chipset e qualquer
+                # outro ponto isolado com a mesma fase: eles disparam juntos,
+                # fora do compasso do resto, e o efeito vira pisca seco. A
+                # posicao no gabinete e a melhor coordenada que sobra, e faz
+                # a onda passar por eles na hora certa.
+                p01[start] = self.x[start]
+                pu[start] = self.x[start]
+                pv[start] = self.y[start]
             else:
                 pu[start:start + count] = idx / max(count - 1, 1)
         self.piece01 = p01
