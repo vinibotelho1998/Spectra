@@ -263,3 +263,5 @@ tools/akko.py            teclado Akko por HID direto, fora do OpenRGB
 [MIT](LICENSE). O Spectra fala o protocolo de rede do OpenRGB via uma
 implementação própria e independente (não usa nem vincula código do OpenRGB),
 então não herda a licença GPL-2.0 dele.
+
+O que ele usa de terceiros está listado no [NOTICE.md](NOTICE.md).
