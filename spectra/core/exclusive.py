@@ -5,9 +5,9 @@ comando que chegou. Com dois programas escrevendo ao mesmo tempo, o
 resultado e a luz piscando entre dois estados dezenas de vezes por
 segundo, sem erro em lugar nenhum.
 
-Por isso o Prism reivindica o hardware para si: um mutex nomeado garante
+Por isso o Spectra reivindica o hardware para si: um mutex nomeado garante
 instancia unica, e o `enforce` fecha os controladores concorrentes
-conhecidos. `PROTEGIDOS` blinda o proprio Prism e o servidor OpenRGB, que
+conhecidos. `PROTEGIDOS` blinda o proprio Spectra e o servidor OpenRGB, que
 e a camada de que ele depende.
 """
 
@@ -50,7 +50,7 @@ ERROR_ALREADY_EXISTS = 183
 _mutex = None
 
 
-def acquire_single_instance(name: str = "Global\\DBXPrism_SingleInstance") -> bool:
+def acquire_single_instance(name: str = "Global\\Spectra_SingleInstance") -> bool:
     """Tenta ficar como unica instancia, via mutex nomeado do Windows.
 
     Devolve False quando ja existe outra instancia rodando. O mutex fica em
@@ -64,7 +64,7 @@ def acquire_single_instance(name: str = "Global\\DBXPrism_SingleInstance") -> bo
     return ctypes.get_last_error() != ERROR_ALREADY_EXISTS
 
 
-def focus_existing_window(title: str = "DBX Prism") -> bool:
+def focus_existing_window(title: str = "Spectra") -> bool:
     """Traz para frente a janela da instancia que ja estava aberta.
 
     E o que faz o segundo clique no atalho parecer que abriu o programa, em
@@ -138,7 +138,7 @@ def enforce() -> dict:
 
     Devolve o que foi fechado e o que resistiu. Falha e comum e esperada:
     varios desses programas rodam como servico e exigem privilegio maior do
-    que o Prism costuma ter.
+    que o Spectra costuma ter.
     """
     alvos = scan()
     fechados, falhou = [], []
@@ -157,7 +157,7 @@ def enforce() -> dict:
 def minimize_openrgb() -> bool:
     """Minimiza a janela do OpenRGB, se estiver aberta.
 
-    O OpenRGB e a camada que o Prism usa, entao nao se fecha. Mas a janela
+    O OpenRGB e a camada que o Spectra usa, entao nao se fecha. Mas a janela
     dele em primeiro plano confunde, e alguns modos da interface dele
     escrevem no hardware junto.
     """

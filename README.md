@@ -1,6 +1,6 @@
-# DBX Prism
+# Spectra
 
-[![Build installer](https://github.com/vinibotelho1998/Dbx-Prism/actions/workflows/release.yml/badge.svg)](https://github.com/vinibotelho1998/Dbx-Prism/actions/workflows/release.yml)
+[![Build installer](https://github.com/vinibotelho1998/Spectra/actions/workflows/release.yml/badge.svg)](https://github.com/vinibotelho1998/Spectra/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Controlador de RGB para Windows com motor de efeitos espacial próprio. Fala
@@ -9,14 +9,14 @@ hardware, e constrói por cima um motor de renderização, uma biblioteca com
 mais de cem efeitos e uma interface web local — tudo neste repositório, sem
 depender de nenhuma UI ou engine de terceiros.
 
-![Interface do DBX Prism](docs/screenshot.png)
+![Interface do Spectra](docs/screenshot.png)
 
 ## Por que existe
 
 Softwares de fabricante (GIGABYTE Control Center, iCUE, Mystic Light,
 L-Connect) só enxergam o próprio hardware, e o [OpenRGB](https://openrgb.org)
 resolve isso muito bem como *camada de hardware* — mas para de propósito na
-parte de efeitos, deixando isso para os clientes dele. O DBX Prism é um desses
+parte de efeitos, deixando isso para os clientes dele. O Spectra é um desses
 clientes: assume o OpenRGB como transporte e foca inteiramente em fazer os
 efeitos ficarem bons, incluindo o tipo que normalmente só aparece em produtos
 fechados de um fabricante — as fitas de cabo estilo
@@ -32,15 +32,15 @@ cada push na `main`.
 **A partir do código-fonte:**
 
 ```powershell
-git clone https://github.com/vinibotelho1998/Dbx-Prism.git
-cd Dbx-Prism
+git clone https://github.com/vinibotelho1998/Spectra.git
+cd Spectra
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 .venv\Scripts\python run.py
 ```
 
-Requer Windows 10/11 e o [OpenRGB](https://openrgb.org) instalado (o DBX
-Prism sobe o servidor dele sozinho se encontrar em `C:\Program Files`).
+Requer Windows 10/11 e o [OpenRGB](https://openrgb.org) instalado (o Spectra
+sobe o servidor dele sozinho se encontrar em `C:\Program Files`).
 
 ## O motor
 
@@ -64,23 +64,23 @@ cruzando) ou *Paralelo* (lâminas acendendo em sequência).
 ## Arquitetura
 
 ```
-prism/core/protocol.py    protocolo binário do OpenRGB, implementado do zero
-prism/core/exclusive.py   instância única + encerra RGB concorrente
-prism/engine/canvas.py    mapa espacial: LED → (x, y), peças físicas 1D/2D
-prism/engine/renderer.py  pilha de camadas, mistura, loop a 60 fps
-prism/engine/palette.py   26 paletas + conversão de cor vetorizada
-prism/engine/noise.py     value noise 3D, fbm, turbulência
-prism/effects/            107 efeitos em 11 categorias
-prism/presets.py          87 cenas prontas
-prism/sources/            áudio (loopback WASAPI), tela (dxcam), sensores
-prism/app.py              estado, perfis, assistente, vigia de conexão
-prism/server.py           HTTP local + API + stream do quadro
-prism/tray.py             bandeja do sistema, fechar-minimiza
+spectra/core/protocol.py    protocolo binário do OpenRGB, implementado do zero
+spectra/core/exclusive.py   instância única + encerra RGB concorrente
+spectra/engine/canvas.py    mapa espacial: LED → (x, y), peças físicas 1D/2D
+spectra/engine/renderer.py  pilha de camadas, mistura, loop a 60 fps
+spectra/engine/palette.py   26 paletas + conversão de cor vetorizada
+spectra/engine/noise.py     value noise 3D, fbm, turbulência
+spectra/effects/            107 efeitos em 11 categorias
+spectra/presets.py          87 cenas prontas
+spectra/sources/            áudio (loopback WASAPI), tela (dxcam), sensores
+spectra/app.py              estado, perfis, assistente, vigia de conexão
+spectra/server.py           HTTP local + API + stream do quadro
+spectra/tray.py             bandeja do sistema, fechar-minimiza
 ui/                       interface (HTML/CSS/JS puro, sem build)
 ```
 
 O OpenRGB é usado só como transporte, via seu protocolo de rede (implementado
-do zero em `prism/core/protocol.py`, sem depender de nenhuma lib GPL). O motor
+do zero em `spectra/core/protocol.py`, sem depender de nenhuma lib GPL). O motor
 de efeitos, a composição de camadas e a interface são todos deste projeto.
 
 ## Efeitos
@@ -187,11 +187,11 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
   tornar isso rápido, não para eliminar a pergunta.
 - **Hardware sem suporte no OpenRGB não aparece.** Alguns fabricantes usam
   protocolos USB proprietários e não documentados; sem um driver do OpenRGB
-  para aquele device, o DBX Prism também não o alcança. A exceção é o teclado
+  para aquele device, o Spectra também não o alcança. A exceção é o teclado
   Akko, abaixo.
 - **Teclado Akko, por HID direto.** O OpenRGB não tem driver para a plataforma
   Rongyuan RY5088 que a Akko revende, então esses teclados seriam invisíveis.
-  `prism/core/akko.py` fala HID com eles diretamente, e é a única parte do
+  `spectra/core/akko.py` fala HID com eles diretamente, e é a única parte do
   projeto que não passa pelo OpenRGB.
 
   O teclado **acompanha a cena ao vivo**, com a cor dominante do efeito, a 60
@@ -202,7 +202,7 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
   taxa, de 8 a 207 quadros por segundo; o driver web do próprio fabricante
   também não transmite por eles.
 
-  Cor por tecla existe, mas só como imagem parada (`PrismApp.imagem_no_teclado`),
+  Cor por tecla existe, mas só como imagem parada (`SpectraApp.imagem_no_teclado`),
   e serve para destaque fixo — `tools/akko.py wasd` marca WASD e as setas, e
   sobrevive a desligar o PC. Animação por tecla exigiria firmware modificado.
 
@@ -217,8 +217,8 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
 - **RAM, SSD e GPU via SMBus/I²C exigem o OpenRGB elevado.** Sem privilégio
   administrativo o OpenRGB não abre o barramento (`Permission Denied, PawnIO
   initialization aborted` no log dele) e os pentes de memória simplesmente não
-  aparecem na lista. O DBX Prism resolve isso sozinho: na primeira abertura
-  registra a tarefa agendada `DBX Prism - OpenRGB SDK Server`, com privilégio
+  aparecem na lista. O Spectra resolve isso sozinho: na primeira abertura
+  registra a tarefa agendada `Spectra - OpenRGB SDK Server`, com privilégio
   máximo, e daí em diante sobe o servidor por ela — o aviso do controle de
   conta aparece uma vez só. Se o servidor já estiver no ar sem privilégio, a
   aba Hardware mostra o aviso com o botão **Corrigir**, que registra a tarefa e
@@ -233,11 +233,11 @@ PyInstaller e empacota com Inno Setup. Para rodar o mesmo processo localmente:
 
 ```powershell
 pip install pyinstaller
-pyinstaller dbx-prism.spec --noconfirm
-iscc installer\dbx-prism.iss /DMyAppVersion=1.0.0
+pyinstaller spectra.spec --noconfirm
+iscc installer\spectra.iss /DMyAppVersion=1.0.0
 ```
 
-O executável instalado grava config e perfis em `%LOCALAPPDATA%\DBXPrism`,
+O executável instalado grava config e perfis em `%LOCALAPPDATA%\Spectra`,
 nunca na própria pasta de instalação — funciona sem privilégio de
 administrador mesmo instalado em `Program Files`.
 
@@ -260,6 +260,6 @@ tools/akko.py            teclado Akko por HID direto, fora do OpenRGB
 
 ## Licença
 
-[MIT](LICENSE). O DBX Prism fala o protocolo de rede do OpenRGB via uma
+[MIT](LICENSE). O Spectra fala o protocolo de rede do OpenRGB via uma
 implementação própria e independente (não usa nem vincula código do OpenRGB),
 então não herda a licença GPL-2.0 dele.

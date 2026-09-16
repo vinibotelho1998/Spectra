@@ -1,6 +1,6 @@
 """Mapa espacial dos LEDs do gabinete.
 
-O motor do Prism trata iluminacao como imagem, nao como lista de canais.
+O motor do Spectra trata iluminacao como imagem, nao como lista de canais.
 Cada LED vira um ponto (x, y) no quadrado unitario e todo efeito e uma
 funcao f(x, y, t) avaliada de uma vez em numpy. Isso e o que permite uma
 onda atravessar o gabinete inteiro passando pelos fans, pelas fitas e

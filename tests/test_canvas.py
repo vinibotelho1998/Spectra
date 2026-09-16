@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pytest
 
-from prism.engine.canvas import (
+from spectra.engine.canvas import (
     SHAPES,
     Canvas,
     auto_placement,

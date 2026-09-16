@@ -1,9 +1,9 @@
 import os, sys, time, traceback
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import numpy as np
-from prism import effects as fx
-from prism.engine.canvas import Canvas
-from prism.engine.context import RenderContext
+from spectra import effects as fx
+from spectra.engine.canvas import Canvas
+from spectra.engine.context import RenderContext
 
 class FakeZone:
     def __init__(self, i, name, count, t=1):

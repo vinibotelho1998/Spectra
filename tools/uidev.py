@@ -21,10 +21,10 @@ import webbrowser
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from prism import app as app_mod
-from prism.core.protocol import MODE_FLAG_HAS_PER_LED_COLOR, Device, Mode, Zone
-from prism.engine.renderer import Renderer
-from prism.server import serve
+from spectra import app as app_mod
+from spectra.core.protocol import MODE_FLAG_HAS_PER_LED_COLOR, Device, Mode, Zone
+from spectra.engine.renderer import Renderer
+from spectra.server import serve
 
 
 def mode(i, name, flags=0):
@@ -124,8 +124,8 @@ class FakeClient:
         refresh_leds(d)
 
 
-class DevApp(app_mod.PrismApp):
-    """PrismApp que conecta numa bancada falsa em vez do OpenRGB."""
+class DevApp(app_mod.SpectraApp):
+    """SpectraApp que conecta numa bancada falsa em vez do OpenRGB."""
 
     def __init__(self, devices):
         super().__init__()

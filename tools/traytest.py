@@ -6,7 +6,7 @@ import time
 from ctypes import wintypes
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TITULO = "DBX Prism"
+TITULO = "Spectra"
 u = ctypes.WinDLL("user32", use_last_error=True)
 u.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
                            wintypes.LPARAM]
@@ -79,7 +79,7 @@ def main():
 
     tray_ok = False
     for _ in range(30):
-        if any(True for _ in janelas_classe("dbx-prism")):
+        if any(True for _ in janelas_classe("spectra")):
             tray_ok = True
             break
         time.sleep(0.5)

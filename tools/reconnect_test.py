@@ -5,7 +5,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from prism.app import PrismApp
+from spectra.app import SpectraApp
 
 
 def openrgb_vivo() -> bool:
@@ -15,7 +15,7 @@ def openrgb_vivo() -> bool:
 
 
 def matar_openrgb() -> bool:
-    subprocess.run(["schtasks", "/end", "/tn", "DBX Prism - OpenRGB SDK Server"],
+    subprocess.run(["schtasks", "/end", "/tn", "Spectra - OpenRGB SDK Server"],
                    capture_output=True, timeout=15)
     for _ in range(20):
         if not openrgb_vivo():
@@ -31,7 +31,7 @@ def matar_openrgb() -> bool:
 
 
 def main():
-    app = PrismApp()
+    app = SpectraApp()
     if not app.connect():
         print(f"FALHA inicial: {app.status_msg}")
         return 1

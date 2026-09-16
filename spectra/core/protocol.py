@@ -122,7 +122,7 @@ class Mode:
     """Um modo de operacao anunciado por um dispositivo.
 
     Interessa sobretudo `per_led`: sem ele o dispositivo nao aceita cor por
-    LED e nenhum efeito do Prism tem como pintar nele.
+    LED e nenhum efeito do Spectra tem como pintar nele.
     """
 
     index: int
@@ -404,7 +404,7 @@ class OpenRGBClient:
     """
 
     def __init__(self, host: str = "127.0.0.1", port: int = 6742,
-                 name: str = "Prism"):
+                 name: str = "Spectra"):
         self.host = host
         self.port = port
         self.client_name = name

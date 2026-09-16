@@ -154,7 +154,7 @@ class SensorSource:
         self._stop.clear()
         self.state.enabled = True
         self._thread = threading.Thread(target=self._loop, daemon=True,
-                                        name="prism-sensors")
+                                        name="spectra-sensors")
         self._thread.start()
         return True
 

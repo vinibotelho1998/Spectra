@@ -1,8 +1,8 @@
 import sys, os, time, struct
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from prism.core.protocol import OpenRGBClient
+from spectra.core.protocol import OpenRGBClient
 
-c = OpenRGBClient(name="Prism-blink")
+c = OpenRGBClient(name="Spectra-blink")
 c.connect()
 devs = c.load_devices()
 

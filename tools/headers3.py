@@ -4,14 +4,14 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from prism.core.protocol import OpenRGBClient, OpenRGBError
+from spectra.core.protocol import OpenRGBClient, OpenRGBError
 
 MAX = 120
 CORES = [("VERMELHO", (255, 0, 0)), ("VERDE", (0, 255, 0)), ("AZUL", (0, 0, 255))]
 
 
 def main():
-    c = OpenRGBClient(name="Prism-headers3")
+    c = OpenRGBClient(name="Spectra-headers3")
     try:
         c.connect()
     except OSError as exc:

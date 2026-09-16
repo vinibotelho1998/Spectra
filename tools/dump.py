@@ -1,11 +1,11 @@
 import sys, os, struct
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from prism.core.protocol import OpenRGBClient, REQUEST_CONTROLLER_DATA
+from spectra.core.protocol import OpenRGBClient, REQUEST_CONTROLLER_DATA
 
 idx = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 proto = int(sys.argv[2]) if len(sys.argv) > 2 else None
 
-c = OpenRGBClient(name="Prism-dump")
+c = OpenRGBClient(name="Spectra-dump")
 c.connect()
 if proto is None:
     proto = c.protocol

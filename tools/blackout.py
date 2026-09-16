@@ -4,14 +4,14 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from prism.core.protocol import OpenRGBClient, OpenRGBError
+from spectra.core.protocol import OpenRGBClient, OpenRGBError
 
 MAX = 120
 
 
 def main():
     restore = "--restore" in sys.argv
-    c = OpenRGBClient(name="Prism-blackout")
+    c = OpenRGBClient(name="Spectra-blackout")
     try:
         c.connect()
     except OSError as exc:

@@ -1,4 +1,4 @@
-"""DBX Prism, controle de iluminacao RGB para PC.
+"""Spectra, controle de iluminacao RGB para PC.
 
 O pacote se divide em `core`, que fala com o hardware pelo protocolo do
 OpenRGB, `engine`, que trata iluminacao como imagem e compoe camadas,

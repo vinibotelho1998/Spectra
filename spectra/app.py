@@ -1,6 +1,6 @@
 """Orquestracao do aplicativo: conexao, cena, perfis e descoberta de LED.
 
-`PrismApp` costura tudo: garante que o servidor OpenRGB esteja de pe,
+`SpectraApp` costura tudo: garante que o servidor OpenRGB esteja de pe,
 conecta, monta o renderizador, liga as fontes externas conforme a cena
 pede e persiste configuracao e perfis.
 
@@ -46,7 +46,7 @@ def _app_root() -> str:
 def _config_root() -> str:
     if getattr(sys, "frozen", False):
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        return os.path.join(base, "DBXPrism")
+        return os.path.join(base, "Spectra")
     return os.path.join(ROOT, "config")
 
 
@@ -59,7 +59,7 @@ OPENRGB_CANDIDATES = [
     r"C:\Program Files\OpenRGB\OpenRGB.exe",
     r"C:\Program Files (x86)\OpenRGB\OpenRGB.exe",
 ]
-OPENRGB_TASK = "DBX Prism - OpenRGB SDK Server"
+OPENRGB_TASK = "Spectra - OpenRGB SDK Server"
 OPENRGB_ARGS = ["--server", "--startminimized"]
 
 CASE_SPOTS = {
@@ -105,7 +105,7 @@ def _port_open(host="127.0.0.1", port=6742, timeout=0.4) -> bool:
         return False
 
 
-class PrismApp:
+class SpectraApp:
     """Estado do aplicativo e as operacoes que a interface aciona.
 
     Quase todo metodo publico daqui corresponde a uma rota da API. Os que
@@ -117,7 +117,7 @@ class PrismApp:
     def __init__(self, host="127.0.0.1", port=6742):
         os.makedirs(PROFILES_DIR, exist_ok=True)
         self.host, self.port = host, port
-        self.client = OpenRGBClient(host, port, name="DBX Prism")
+        self.client = OpenRGBClient(host, port, name="Spectra")
         self.renderer: Renderer | None = None
         self.config = self._load_config()
         self.audio = None
@@ -558,7 +558,7 @@ class PrismApp:
             return
         self._watchdog_stop.clear()
         self._watchdog = threading.Thread(target=self._watchdog_loop,
-                                          name="prism-watchdog", daemon=True)
+                                          name="spectra-watchdog", daemon=True)
         self._watchdog.start()
 
     def _watchdog_loop(self):
@@ -1164,7 +1164,7 @@ class PrismApp:
                 self._identify_until = 0.0
 
         threading.Thread(target=restore, daemon=True,
-                         name="prism-identify").start()
+                         name="spectra-identify").start()
         return {"ok": True, "lit": zone.leds_count, "seconds": seconds}
 
     def set_zone_plan(self, device_key_: str, zone_index: int, parts):

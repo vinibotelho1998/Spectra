@@ -3,10 +3,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from prism import effects as fx
-from prism.effects.base import CATEGORY_ORDER
-from prism.engine.canvas import Canvas
-from prism.engine.context import RenderContext
+from spectra import effects as fx
+from spectra.effects.base import CATEGORY_ORDER
+from spectra.engine.canvas import Canvas
+from spectra.engine.context import RenderContext
 
 from fakes import bancada
 

@@ -4,7 +4,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from prism.core.protocol import OpenRGBClient, OpenRGBError
+from spectra.core.protocol import OpenRGBClient, OpenRGBError
 
 
 def show(devs, titulo):
@@ -26,7 +26,7 @@ def show(devs, titulo):
 
 def main():
     fix = "--fix" in sys.argv
-    c = OpenRGBClient(name="Prism-modes")
+    c = OpenRGBClient(name="Spectra-modes")
     try:
         c.connect()
     except OSError as exc:
@@ -41,7 +41,7 @@ def main():
               "alcance do OpenRGB.")
     else:
         print(f"\n{len(ruins)} device(s) NAO estao em modo direto -- esses "
-              "animam sozinhos e ignoram o que o Prism envia.")
+              "animam sozinhos e ignoram o que o Spectra envia.")
 
     if fix:
         print("\nforcando Direct em todos...")

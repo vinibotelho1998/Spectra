@@ -15,7 +15,7 @@ $exe = @(
 
 if (-not $exe) { throw "OpenRGB.exe nao encontrado." }
 
-$name = 'DBX Prism - OpenRGB SDK Server'
+$name = 'Spectra - OpenRGB SDK Server'
 Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue |
     Unregister-ScheduledTask -Confirm:$false
 
@@ -29,7 +29,7 @@ $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
 
 Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger `
     -Principal $principal -Settings $settings `
-    -Description 'Servidor SDK do OpenRGB elevado, usado pelo DBX Prism.' | Out-Null
+    -Description 'Servidor SDK do OpenRGB elevado, usado pelo Spectra.' | Out-Null
 
 Write-Host "Tarefa '$name' criada." -ForegroundColor Green
 
@@ -37,4 +37,4 @@ Get-Process OpenRGB -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 1
 Start-ScheduledTask -TaskName $name
 Write-Host "Servidor reiniciado com privilegio maximo." -ForegroundColor Green
-Write-Host "Aguarde ~20s e abra o DBX Prism: a RAM, o SSD e a GPU devem aparecer."
+Write-Host "Aguarde ~20s e abra o Spectra: a RAM, o SSD e a GPU devem aparecer."

@@ -6,8 +6,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from prism.app import PrismApp
-from prism.server import serve
+from spectra.app import SpectraApp
+from spectra.server import serve
 
 PORT = 7319
 RESULT = {}
@@ -131,7 +131,7 @@ def probe(window):
 
 
 def main():
-    app = PrismApp()
+    app = SpectraApp()
     app.connect()
     print(f"[uicheck] {app.status_msg}")
     antes = {f"{z['device']}:{z['zone']}": z["count"] for z in app.resizable_zones()}
@@ -141,7 +141,7 @@ def main():
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
     import webview
-    win = webview.create_window("Prism (uicheck)", f"http://127.0.0.1:{PORT}/",
+    win = webview.create_window("Spectra (uicheck)", f"http://127.0.0.1:{PORT}/",
                                 width=1400, height=880)
     threading.Thread(target=probe, args=(win,), daemon=True).start()
     try:

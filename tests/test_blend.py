@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from prism.engine import blend
+from spectra.engine import blend
 
 BRANCO = np.ones((8, 3), dtype=np.float32)
 PRETO = np.zeros((8, 3), dtype=np.float32)

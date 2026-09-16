@@ -4,11 +4,11 @@ A parte do hardware que fala por SMBus, que e onde moram os pentes de
 memoria RGB e parte das placas-mae, so responde a um processo elevado.
 Sem isso o OpenRGB registra `Permission Denied, PawnIO initialization
 aborted` e simplesmente nao lista a DRAM: nao ha erro de conexao nem
-dispositivo torto, o pente some da lista e parece que o Prism ignorou.
+dispositivo torto, o pente some da lista e parece que o Spectra ignorou.
 
 Pedir elevacao a cada abertura significaria um aviso do controle de
 conta toda vez. Por isso o caminho preferido e uma tarefa agendada com
-`HighestAvailable`, criada uma unica vez: dali em diante o Prism, mesmo
+`HighestAvailable`, criada uma unica vez: dali em diante o Spectra, mesmo
 sem privilegio, manda rodar a tarefa e o servidor sobe elevado calado.
 """
 
@@ -30,7 +30,7 @@ PAWNIO_DIRS = [
 _TASK_XML = """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Sobe o servidor SDK do OpenRGB elevado, para o DBX Prism enxergar a memoria RAM e os controladores de SMBus.</Description>
+    <Description>Sobe o servidor SDK do OpenRGB elevado, para o Spectra enxergar a memoria RAM e os controladores de SMBus.</Description>
   </RegistrationInfo>
   <Triggers />
   <Principals>
@@ -76,7 +76,7 @@ def _xml_escape(s: str) -> str:
 
 
 def sou_admin() -> bool:
-    """Diz se o proprio Prism esta rodando elevado."""
+    """Diz se o proprio Spectra esta rodando elevado."""
     try:
         return bool(ctypes.WinDLL("shell32").IsUserAnAdmin())
     except Exception:
@@ -274,7 +274,7 @@ def criar_tarefa(nome: str, exe: str, args: list) -> str:
         user=_xml_escape(conta), exe=_xml_escape(exe),
         args=_xml_escape(" ".join(args)),
         cwd=_xml_escape(os.path.dirname(exe)))
-    caminho = os.path.join(tempfile.gettempdir(), "dbx-prism-openrgb-task.xml")
+    caminho = os.path.join(tempfile.gettempdir(), "spectra-openrgb-task.xml")
     try:
         with open(caminho, "w", encoding="utf-16") as f:
             f.write(xml)

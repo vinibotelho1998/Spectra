@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from prism.core.akko import TECLAS, AkkoKeyboard
+from spectra.core.akko import TECLAS, AkkoKeyboard
 
 
 def cor_de(texto: str) -> tuple:

@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from prism.core.protocol import (
+from spectra.core.protocol import (
     CLIENT_PROTOCOL_VERSION,
     HEADER,
     MAGIC,

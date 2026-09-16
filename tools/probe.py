@@ -1,10 +1,10 @@
 import sys, os, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from prism.core.protocol import OpenRGBClient, OpenRGBError
+from spectra.core.protocol import OpenRGBClient, OpenRGBError
 
 def main():
-    c = OpenRGBClient(name="Prism-probe")
+    c = OpenRGBClient(name="Spectra-probe")
     for attempt in range(20):
         try:
             c.connect()

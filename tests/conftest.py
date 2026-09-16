@@ -10,8 +10,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fakes import bancada
 
-from prism.engine.canvas import Canvas
-from prism.engine.context import RenderContext
+from spectra.engine.canvas import Canvas
+from spectra.engine.context import RenderContext
 
 
 @pytest.fixture

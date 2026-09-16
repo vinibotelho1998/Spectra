@@ -12,15 +12,15 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
 
-from prism.app import PrismApp
-from prism.core import exclusive
-from prism.server import serve
+from spectra.app import SpectraApp
+from spectra.core import exclusive
+from spectra.server import serve
 
-TITULO = "DBX Prism"
+TITULO = "Spectra"
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(prog="prism")
+    ap = argparse.ArgumentParser(prog="spectra")
     ap.add_argument("--port", type=int, default=7311, help="porta da UI local")
     ap.add_argument("--orgb-port", type=int, default=6742, help="porta do OpenRGB")
     ap.add_argument("--browser", action="store_true", help="abrir no navegador")
@@ -32,27 +32,27 @@ def main() -> int:
     args = ap.parse_args()
 
     if not args.allow_multiple and not exclusive.acquire_single_instance():
-        print("[prism] ja ha uma instancia rodando; trazendo para a frente")
+        print("[spectra] ja ha uma instancia rodando; trazendo para a frente")
         exclusive.focus_existing_window(TITULO)
         return 0
 
-    app = PrismApp(port=args.orgb_port)
+    app = SpectraApp(port=args.orgb_port)
     app.status_msg = "conectando ao OpenRGB"
 
     try:
         httpd = serve(app, port=args.port)
     except OSError as exc:
-        print(f"[prism] nao consegui abrir a porta {args.port}: {exc}")
+        print(f"[spectra] nao consegui abrir a porta {args.port}: {exc}")
         app.shutdown()
         return 1
 
     url = f"http://127.0.0.1:{args.port}/"
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
-    print(f"[prism] interface em {url}")
+    print(f"[spectra] interface em {url}")
 
     threading.Thread(target=connect_in_background, args=(app,),
-                     name="prism-connect", daemon=True).start()
+                     name="spectra-connect", daemon=True).start()
 
     code = 0
     try:
@@ -68,13 +68,13 @@ def main() -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        print("[prism] encerrando")
+        print("[spectra] encerrando")
         httpd.shutdown()
         app.shutdown(blank=not args.keep_leds)
     return code
 
 
-def connect_in_background(app: PrismApp) -> None:
+def connect_in_background(app: SpectraApp) -> None:
     """Conecta no OpenRGB sem segurar a janela.
 
     Subir o servidor e detectar hardware pode levar mais de vinte segundos;
@@ -82,28 +82,28 @@ def connect_in_background(app: PrismApp) -> None:
     programa nao abriu.
     """
     ok = app.connect(exclusive_pass=True)
-    print(f"[prism] {app.status_msg}")
+    print(f"[spectra] {app.status_msg}")
     if ok:
         r = app.renderer
-        print(f"[prism] {len(r.canvas.devices)} device(s), {r.canvas.n} leds, "
+        print(f"[spectra] {len(r.canvas.devices)} device(s), {r.canvas.n} leds, "
               f"protocolo v{app.client.protocol}")
         for d in r.canvas.devices:
             flag = "direct" if r.direct_ok.get(d.index) else "SEM DIRECT"
             print(f"        - {d.name} ({d.led_count} leds, {flag})")
     else:
-        print("[prism] seguindo sem hardware; a UI sobe mesmo assim")
+        print("[spectra] seguindo sem hardware; a UI sobe mesmo assim")
 
 
-def run_window(url: str, app: PrismApp) -> int:
+def run_window(url: str, app: SpectraApp) -> int:
     try:
         import webview
     except Exception as exc:
-        print(f"[prism] pywebview indisponivel ({exc}); abrindo no navegador")
+        print(f"[spectra] pywebview indisponivel ({exc}); abrindo no navegador")
         webbrowser.open(url)
         while True:
             time.sleep(1)
 
-    from prism.tray import Tray, set_window_icon
+    from spectra.tray import Tray, set_window_icon
 
     window = webview.create_window(
         TITULO, url, width=1420, height=900, min_size=(1060, 680),
@@ -120,7 +120,7 @@ def run_window(url: str, app: PrismApp) -> int:
 
     tray = Tray(window, app, encerrar)
     if not tray.start():
-        print("[prism] bandeja indisponivel; fechar a janela vai encerrar")
+        print("[spectra] bandeja indisponivel; fechar a janela vai encerrar")
 
     def ao_fechar():
         if estado["sair"] or not tray.icon:
@@ -134,7 +134,7 @@ def run_window(url: str, app: PrismApp) -> int:
     try:
         webview.start(gui="edgechromium")
     except Exception as exc:
-        print(f"[prism] falha ao abrir a janela ({exc}); abrindo no navegador")
+        print(f"[spectra] falha ao abrir a janela ({exc}); abrindo no navegador")
         webbrowser.open(url)
         while True:
             time.sleep(1)

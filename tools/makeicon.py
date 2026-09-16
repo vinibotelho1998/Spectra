@@ -55,12 +55,12 @@ def main():
     tamanhos = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
     imagens = [desenhar(t, detalhado=t >= 32) for t in tamanhos]
 
-    ico = os.path.join(ASSETS, "prism.ico")
+    ico = os.path.join(ASSETS, "spectra.ico")
     imagens[-1].save(ico, format="ICO",
                      sizes=[(t, t) for t in tamanhos])
-    png = os.path.join(ASSETS, "prism.png")
+    png = os.path.join(ASSETS, "spectra.png")
     imagens[-1].save(png, format="PNG")
-    png64 = os.path.join(ASSETS, "prism-64.png")
+    png64 = os.path.join(ASSETS, "spectra-64.png")
     desenhar(64, True).save(png64, format="PNG")
 
     for caminho in (ico, png, png64):

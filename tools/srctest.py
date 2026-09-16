@@ -1,10 +1,10 @@
 import os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import numpy as np
-from prism.engine.context import AudioState, ScreenState, SensorState
+from spectra.engine.context import AudioState, ScreenState, SensorState
 
 print("=========== AUDIO ===========")
-from prism.sources.audio import AudioSource
+from spectra.sources.audio import AudioSource
 devs, err = AudioSource.list_devices()
 print(f"dispositivos de loopback: {len(devs)}" + (f"  (erro: {err})" if err else ""))
 for d in devs[:6]:
@@ -25,7 +25,7 @@ else:
     print(f"  FALHOU: {a.error}")
 
 print("\n=========== TELA ===========")
-from prism.sources.screen import ScreenSource
+from spectra.sources.screen import ScreenSource
 outs, err = ScreenSource.list_outputs()
 print(f"saidas: {len(outs)}" + (f"  (erro: {err})" if err else ""))
 for o in outs: print(f"  [{o['index']}] {o['name']}")
@@ -44,7 +44,7 @@ else:
     print(f"  FALHOU: {sc.error}")
 
 print("\n=========== SENSORES ===========")
-from prism.sources.sensors import SensorSource
+from spectra.sources.sensors import SensorSource
 sen_st = SensorState()
 sn = SensorSource(sen_st, interval=0.5)
 if sn.start():

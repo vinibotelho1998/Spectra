@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-akko = pytest.importorskip("prism.core.akko",
+akko = pytest.importorskip("spectra.core.akko",
                            reason="modulo so existe no Windows")
 
 

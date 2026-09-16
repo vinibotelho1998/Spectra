@@ -61,7 +61,7 @@ function openProbe(device, zone, name) {
 
 function loadInventory() {
   try {
-    const raw = localStorage.getItem("prism.inventory");
+    const raw = localStorage.getItem("spectra.inventory");
     if (raw) {
       const v = JSON.parse(raw);
       if (Array.isArray(v) && v.length) return v;
@@ -72,7 +72,7 @@ function loadInventory() {
 
 function saveInventory() {
   try {
-    localStorage.setItem("prism.inventory", JSON.stringify(W.inventory));
+    localStorage.setItem("spectra.inventory", JSON.stringify(W.inventory));
   } catch (e) {}
 }
 

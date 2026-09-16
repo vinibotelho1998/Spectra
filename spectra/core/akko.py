@@ -1,6 +1,6 @@
 """Teclado Akko por HID direto, fora do OpenRGB.
 
-O Prism fala com o hardware pelo OpenRGB, sempre. Este modulo e a unica
+O Spectra fala com o hardware pelo OpenRGB, sempre. Este modulo e a unica
 excecao, e existe por um motivo concreto: o OpenRGB nao tem driver para os
 teclados da plataforma Rongyuan RY5088, que a Akko revende, entao esse
 hardware seria invisivel para o aplicativo inteiro.

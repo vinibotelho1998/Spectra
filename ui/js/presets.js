@@ -5,7 +5,7 @@ const NEED_LABEL = { audio: "audio", screen: "tela", sensors: "sensores" };
 let showAllPresets = false;
 let presetCat = "todos";
 
-const FAV_KEY = "prism.favoritos";
+const FAV_KEY = "spectra.favoritos";
 
 function loadFavs() {
   try {
@@ -375,9 +375,9 @@ function renderSetupBanner() {
           <button class="btn sm" id="bannerReconnect">Tentar de novo</button>
         </div>
         <p>${esc(st.status || "o servidor do OpenRGB nao respondeu")}.
-        O Prism usa o OpenRGB so como camada de hardware: sem ele no ar,
+        O Spectra usa o OpenRGB so como camada de hardware: sem ele no ar,
         nenhum LED e alcancado. Baixe em <code>openrgb.org</code> e deixe
-        instalado em <code>C:\\Program Files</code> que o Prism sobe sozinho.</p>
+        instalado em <code>C:\\Program Files</code> que o Spectra sobe sozinho.</p>
       </div>`;
     const b = $("#bannerReconnect");
     if (b) b.addEventListener("click", async () => {
@@ -394,7 +394,7 @@ function renderSetupBanner() {
       box.innerHTML = `
         <div class="setup">
           <h3>Nenhum LED controlavel</h3>
-          <p>O Prism conectou no OpenRGB, mas nao ha LEDs ativos. Confira a aba
+          <p>O Spectra conectou no OpenRGB, mas nao ha LEDs ativos. Confira a aba
           <b>Hardware</b>: pode ser que todos os dispositivos estejam desligados
           do controle, ou que nenhum tenha modo Direct.</p>
         </div>`;

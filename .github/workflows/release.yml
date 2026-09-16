@@ -28,7 +28,7 @@ jobs:
         run: python -m pytest
 
       - name: Congelar o app (PyInstaller)
-        run: pyinstaller dbx-prism.spec --noconfirm
+        run: pyinstaller spectra.spec --noconfirm
 
       - name: Instalar o Inno Setup
         run: choco install innosetup --no-progress -y
@@ -45,11 +45,11 @@ jobs:
         run: |
           $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" -ErrorAction Stop |
             Select-Object -First 1 -ExpandProperty FullName
-          & $iscc installer\dbx-prism.iss "/DMyAppVersion=${{ steps.ver.outputs.version }}"
+          & $iscc installer\spectra.iss "/DMyAppVersion=${{ steps.ver.outputs.version }}"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DBXPrism-Setup-${{ steps.ver.outputs.version }}
+          name: Spectra-Setup-${{ steps.ver.outputs.version }}
           path: installer/output/*.exe
 
       - name: Publicar a release "latest"
@@ -57,7 +57,7 @@ jobs:
         run: |
           gh release delete latest --yes --cleanup-tag 2>$null
           gh release create latest installer\output\*.exe `
-            --title "DBX Prism ${{ steps.ver.outputs.version }}" `
+            --title "Spectra ${{ steps.ver.outputs.version }}" `
             --notes "Build automatico do topo da main (commit ${{ github.sha }})." `
             --latest
         env:

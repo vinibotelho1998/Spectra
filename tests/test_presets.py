@@ -5,9 +5,9 @@ import re
 
 import pytest
 
-from prism import presets
-from prism.effects import EFFECTS
-from prism.engine import blend
+from spectra import presets
+from spectra.effects import EFFECTS
+from spectra.engine import blend
 
 HEX = re.compile(r"^#[0-9a-f]{3,8}$", re.I)
 TODOS = list(presets.PRESETS)

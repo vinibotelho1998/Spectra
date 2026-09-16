@@ -360,7 +360,7 @@ class Renderer:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, name="prism-render",
+        self._thread = threading.Thread(target=self._loop, name="spectra-render",
                                         daemon=True)
         self._thread.start()
 

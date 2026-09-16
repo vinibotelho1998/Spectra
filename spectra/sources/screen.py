@@ -79,7 +79,7 @@ class ScreenSource:
         self._stop.clear()
         self.state.enabled = True
         self._thread = threading.Thread(target=self._loop, daemon=True,
-                                        name="prism-screen")
+                                        name="spectra-screen")
         self._thread.start()
         return True
 

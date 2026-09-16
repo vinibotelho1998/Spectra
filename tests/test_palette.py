@@ -5,7 +5,7 @@ import re
 import numpy as np
 import pytest
 
-from prism.engine.palette import (
+from spectra.engine.palette import (
     PALETTES,
     get_lut,
     hex_to_rgb,

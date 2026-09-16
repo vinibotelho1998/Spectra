@@ -4,7 +4,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from prism.core.protocol import OpenRGBClient, OpenRGBError
+from spectra.core.protocol import OpenRGBClient, OpenRGBError
 
 MAX = 120
 
@@ -23,7 +23,7 @@ CORES = [
 
 
 def main():
-    c = OpenRGBClient(name="Prism-identify")
+    c = OpenRGBClient(name="Spectra-identify")
     try:
         c.connect()
     except OSError as exc:

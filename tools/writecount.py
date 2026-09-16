@@ -4,8 +4,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from prism.app import PrismApp
-from prism.core import protocol
+from spectra.app import SpectraApp
+from spectra.core import protocol
 
 COUNT = {"UPDATE_MODE": 0, "RESIZEZONE": 0, "UPDATE_LEDS": 0,
          "UPDATE_ZONE_LEDS": 0, "SET_CUSTOM_MODE": 0, "load_devices": 0}
@@ -35,7 +35,7 @@ def instrument(client):
 
 
 def main():
-    app = PrismApp()
+    app = SpectraApp()
     if not app.connect():
         print(f"FALHA: {app.status_msg}")
         return 1

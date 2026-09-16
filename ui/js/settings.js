@@ -37,7 +37,7 @@ function renderSettings() {
     "Dois programas escrevendo no mesmo controlador e a causa classica de gabinete piscando."));
   beh.appendChild(switchEl("Subir o servidor do OpenRGB sozinho", st.autostart_openrgb !== false,
     (v) => API.post("/api/settings", { autostart_openrgb: v })
-      .then(() => toast(v ? "OpenRGB sobe automaticamente" : "OpenRGB nao sera iniciado pelo Prism"))));
+      .then(() => toast(v ? "OpenRGB sobe automaticamente" : "OpenRGB nao sera iniciado pelo Spectra"))));
   const acts = document.createElement("div");
   acts.className = "settings-actions";
   const excl = document.createElement("button");

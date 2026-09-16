@@ -1,6 +1,6 @@
 """Icone na bandeja do Windows e o icone da janela.
 
-Fechar a janela manda o Prism para a bandeja em vez de encerrar, porque
+Fechar a janela manda o Spectra para a bandeja em vez de encerrar, porque
 iluminacao e algo que fica ligado enquanto a maquina esta ligada. Sair
 de verdade so pelo menu da bandeja.
 """
@@ -11,8 +11,8 @@ import os
 import threading
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ICONE = os.path.join(RAIZ, "assets", "prism.ico")
-ICONE_PNG = os.path.join(RAIZ, "assets", "prism.png")
+ICONE = os.path.join(RAIZ, "assets", "spectra.ico")
+ICONE_PNG = os.path.join(RAIZ, "assets", "spectra.png")
 
 
 class Tray:
@@ -83,16 +83,16 @@ class Tray:
             return False
 
         menu = pystray.Menu(
-            pystray.MenuItem("Abrir DBX Prism", self._mostrar, default=True),
+            pystray.MenuItem("Abrir Spectra", self._mostrar, default=True),
             pystray.MenuItem(self._status, None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(self._pausa_label, self._alternar_pausa),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Sair", self._sair),
         )
-        self.icon = pystray.Icon("dbx-prism", img, "DBX Prism", menu)
+        self.icon = pystray.Icon("spectra", img, "Spectra", menu)
         self._thread = threading.Thread(target=self.icon.run, daemon=True,
-                                        name="dbx-prism-tray")
+                                        name="spectra-tray")
         self._thread.start()
         return True
 
@@ -105,7 +105,7 @@ class Tray:
             pass
 
 
-def set_window_icon(titulo: str = "DBX Prism") -> bool:
+def set_window_icon(titulo: str = "Spectra") -> bool:
     """Aplica o icone do app na janela pelo titulo dela.
 
     A janela nativa vem do webview e nao expoe o icone, entao ele e

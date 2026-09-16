@@ -2,11 +2,11 @@
   #define MyAppVersion "0.0.0-dev"
 #endif
 
-#define MyAppName "DBX Prism"
-#define MyAppPublisher "DBX"
-#define MyAppURL "https://github.com/vinibotelho1998/Dbx-Prism"
-#define MyAppExeName "DBXPrism.exe"
-#define SourceDist "..\dist\DBXPrism"
+#define MyAppName "Spectra"
+#define MyAppPublisher "Vinicius Botelho"
+#define MyAppURL "https://github.com/vinibotelho1998/Spectra"
+#define MyAppExeName "Spectra.exe"
+#define SourceDist "..\dist\Spectra"
 
 [Setup]
 AppId={{6C7F2E1A-6B3D-4F2C-9B7E-4A3E2C1D9F0B}
@@ -22,8 +22,8 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=output
-OutputBaseFilename=DBXPrism-Setup-{#MyAppVersion}
-SetupIconFile=..\assets\prism.ico
+OutputBaseFilename=Spectra-Setup-{#MyAppVersion}
+SetupIconFile=..\assets\spectra.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/max
 SolidCompression=yes
@@ -39,7 +39,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "autostart"; Description: "Iniciar o DBX Prism junto com o Windows"; GroupDescription: "Opcoes:"; Flags: unchecked
+Name: "autostart"; Description: "Iniciar o Spectra junto com o Windows"; GroupDescription: "Opcoes:"; Flags: unchecked
 
 [Files]
 Source: "{#SourceDist}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -71,8 +71,8 @@ begin
   if (CurPageID = wpFinished) and not OpenRGBInstalled then
   begin
     WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10 + #13#10 +
-      'O OpenRGB nao foi encontrado nesta maquina. O DBX Prism precisa dele ' +
-      'para falar com o hardware -- baixe em openrgb.org e abra o DBX Prism ' +
+      'O OpenRGB nao foi encontrado nesta maquina. O Spectra precisa dele ' +
+      'para falar com o hardware -- baixe em openrgb.org e abra o Spectra ' +
       'de novo depois.';
   end;
 end;

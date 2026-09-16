@@ -14,7 +14,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import effects as fx
-from .app import ROOT, PrismApp
+from .app import ROOT, SpectraApp
 
 UI_DIR = os.path.join(ROOT, "ui")
 ASSETS_DIR = os.path.join(ROOT, "assets")
@@ -29,8 +29,8 @@ class Handler(BaseHTTPRequestHandler):
     """
 
     protocol_version = "HTTP/1.1"
-    server_version = "DBX-Prism"
-    app: PrismApp = None
+    server_version = "Spectra"
+    app: SpectraApp = None
 
     def log_message(self, fmt, *args):
         """Silencia o log por pedido, que so poluiria o console."""
@@ -253,7 +253,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"ok": True})
 
 
-def serve(app: PrismApp, host="127.0.0.1", port=7311):
+def serve(app: SpectraApp, host="127.0.0.1", port=7311):
     """Sobe o servidor numa thread e devolve o endereco da interface."""
     Handler.app = app
     httpd = ThreadingHTTPServer((host, port), Handler)

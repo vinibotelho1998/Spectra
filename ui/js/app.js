@@ -1352,7 +1352,7 @@ function cartaoTeclado(st) {
      cena: o controlador reaplica a luz a cada comando e animar faria ele
      piscar.${t.error ? " <b>" + esc(t.error) + "</b>" : ""}</p>`;
 
-  const sw = switchEl("Controlar pelo Prism", st.akko_keyboard !== false,
+  const sw = switchEl("Controlar pelo Spectra", st.akko_keyboard !== false,
     async (v) => {
       await API.post("/api/teclado", { enabled: v });
       refreshState();
@@ -1384,7 +1384,7 @@ function renderDevices() {
   info.innerHTML =
     `<span><b>${devs.length}</b> dispositivos</span>` +
     `<span><b>${totalLeds}</b> LEDs no total</span>` +
-    `<span><b>${st.canvas ? st.canvas.led_count : 0}</b> sob controle do Prism</span>` +
+    `<span><b>${st.canvas ? st.canvas.led_count : 0}</b> sob controle do Spectra</span>` +
     (st.reconnects ? `<span><b>${st.reconnects}</b> reconexoes</span>` : "") +
     (semDirect ? `<span class="err">${semDirect} sem modo Direct</span>` : "");
 
@@ -1413,7 +1413,7 @@ function renderDevices() {
       </div>
       <div class="device-meta">${esc([d.vendor, d.description].filter(Boolean).join(" · "))}</div>`;
 
-    const sw = switchEl("Controlar pelo Prism", on, async (v) => {
+    const sw = switchEl("Controlar pelo Spectra", on, async (v) => {
       const e2 = { ...enabled, [d.key]: v };
       await API.post("/api/settings", { enabled_devices: e2 });
       refreshState();
@@ -1423,8 +1423,8 @@ function renderDevices() {
     if (!d.has_direct) {
       el.insertAdjacentHTML("beforeend",
         `<p class="hint">Este dispositivo nao anuncia modo de cor por LED, entao o
-         Prism nao consegue animar nele. E limitacao do driver do OpenRGB para
-         esse hardware, nao do Prism.</p>`);
+         Spectra nao consegue animar nele. E limitacao do driver do OpenRGB para
+         esse hardware, nao do Spectra.</p>`);
     }
 
     for (const z of d.zones) {
@@ -1480,7 +1480,7 @@ function renderDevices() {
   box.insertAdjacentHTML("beforeend",
     `<p class="hint muted">Aparece aqui so o que o OpenRGB tem driver para
      controlar. Peca que nao esta na lista nao tem suporte no OpenRGB, e o
-     Prism nao alcanca ela: o app fala com o hardware exclusivamente por ele.
+     Spectra nao alcanca ela: o app fala com o hardware exclusivamente por ele.
      Teclado e mouse de fabricante com protocolo fechado sao os casos mais
      comuns.</p>`);
 }
@@ -1575,7 +1575,7 @@ async function renderSources() {
     if (!s.lhm) {
       card.insertAdjacentHTML("beforeend",
         `<p class="src-err">Temperaturas indisponiveis: ${esc(s.error || "LibreHardwareMonitorLib.dll ausente")}.
-         Coloque a DLL em <code>vendor/</code> e rode o Prism como administrador.
+         Coloque a DLL em <code>vendor/</code> e rode o Spectra como administrador.
          Uso de CPU e RAM continua funcionando sem ela.</p>`);
     }
   }));

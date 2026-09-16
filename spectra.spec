@@ -38,7 +38,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="DBXPrism",
+    name="Spectra",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -49,7 +49,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="assets/prism.ico",
+    icon="assets/spectra.ico",
 )
 
 coll = COLLECT(
@@ -59,5 +59,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="DBXPrism",
+    name="Spectra",
 )

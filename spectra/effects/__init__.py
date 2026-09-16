@@ -1,7 +1,7 @@
 """Catalogo de efeitos.
 
 Importar o pacote registra todos os efeitos dos modulos filhos em
-`EFFECTS`, entao basta importar `prism.effects` para ter o catalogo
+`EFFECTS`, entao basta importar `spectra.effects` para ter o catalogo
 completo.
 """
 
