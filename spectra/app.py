@@ -759,24 +759,40 @@ class SpectraApp:
             return layer.to_json()
 
     def update_layer(self, layer_id: str, patch: dict):
-        """Aplica mudancas numa camada existente."""
+        """Aplica mudancas numa camada existente.
+
+        A camada e o mesmo objeto que o laco de render esta desenhando, entao
+        a mudanca entra com a trava do renderizador. Sem ela, trocar o efeito
+        limpava o estado no meio de um quadro, e parametro novo mudava o
+        dicionario enquanto o render o percorria: o erro caia no tratamento
+        de efeito defeituoso e a camada era desligada sozinha.
+        """
         with self._lock:
-            layer = self.renderer.get_layer(layer_id)
-            if not layer:
-                return None
-            if "effect" in patch and patch["effect"] != layer.effect_id:
-                layer.effect_id = patch["effect"]
-                layer.params = {}
-                layer.state.clear()
-            if "params" in patch:
-                layer.params.update(patch["params"])
-            for k, attr in (("blend", "blend"), ("opacity", "opacity"),
-                            ("enabled", "enabled"), ("name", "name")):
-                if k in patch:
-                    setattr(layer, attr, patch[k])
-            if "targets" in patch:
-                layer.targets = list(patch["targets"] or [])
-                layer._mask_key = None
+            with self.renderer._lock:
+                layer = self.renderer.get_layer(layer_id)
+                if not layer:
+                    return None
+                if "effect" in patch and patch["effect"] != layer.effect_id:
+                    layer.effect_id = patch["effect"]
+                    layer.params = {}
+                    layer.state.clear()
+                if "params" in patch:
+                    layer.params.update(patch["params"])
+                for k, attr in (("blend", "blend"), ("name", "name")):
+                    if k in patch:
+                        setattr(layer, attr, patch[k])
+                # mesmos tipos que o construtor da camada garante: opacidade
+                # em texto quebrava a comparacao no laco de render, que morria
+                # a cada quadro e deixava o vigia reconectando sem fim
+                if "opacity" in patch:
+                    layer.opacity = float(patch["opacity"])
+                if "enabled" in patch:
+                    layer.enabled = bool(patch["enabled"])
+                if "targets" in patch:
+                    layer.targets = list(patch["targets"] or [])
+                    layer._mask_key = None
+            # fora da trava do renderizador: abrir captura de audio leva
+            # centenas de milissegundos, e o gabinete congelaria esse tempo
             self._sync_sources()
             self._sincroniza_aux()
             return layer.to_json()
@@ -789,10 +805,22 @@ class SpectraApp:
             self._sincroniza_aux()
 
     def reorder_layers(self, order):
-        """Reordena as camadas conforme a lista de ids."""
+        """Reordena as camadas conforme a lista de ids.
+
+        Camada que a lista nao cita, como uma adicionada enquanto o pedido
+        viajava, vai para o topo em vez de sumir, e id repetido conta uma
+        vez so: a mesma camada duas vezes na pilha dividiria o estado.
+        """
         with self._lock:
             by_id = {l.id: l for l in self.renderer.layers}
-            self.renderer.layers = [by_id[i] for i in order if i in by_id]
+            nova, vistos = [], set()
+            for i in order:
+                if i in by_id and i not in vistos:
+                    vistos.add(i)
+                    nova.append(by_id[i])
+            nova += [l for l in self.renderer.layers if l.id not in vistos]
+            self.renderer.set_layers(nova)
+            self._sincroniza_aux()
 
     def update_settings(self, patch: dict):
         """Altera brilho, gama, taxa de quadros e afins."""
@@ -892,8 +920,14 @@ class SpectraApp:
         return self.resize_zones([(device_key_, zone_index, size)], persist)
 
     def _probe_open_session(self, probe_max: int):
-        sess = {"sizes": {}, "commits": {},
-                "was_paused": bool(self.renderer.settings.get("paused"))}
+        # zona piscando agora pausou o render so por uns segundos; o estado
+        # que vale e o de antes dela, senao o render ficaria parado de vez
+        # quando o assistente terminasse
+        if self._identify_until > time.time():
+            antes = self._identify_was_paused
+        else:
+            antes = bool(self.renderer.settings.get("paused"))
+        sess = {"sizes": {}, "commits": {}, "was_paused": antes}
         self.renderer.settings["paused"] = True
         time.sleep(0.08)
 
