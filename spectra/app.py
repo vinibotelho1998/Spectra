@@ -105,6 +105,27 @@ def _port_open(host="127.0.0.1", port=6742, timeout=0.4) -> bool:
         return False
 
 
+def _grava_json(path: str, data) -> None:
+    """Grava JSON num temporario ao lado e so entao troca pelo arquivo final.
+
+    Se a serializacao falhar no meio, ou a maquina cair durante a escrita,
+    o arquivo anterior continua inteiro em vez de ficar truncado.
+    """
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 class SpectraApp:
     """Estado do aplicativo e as operacoes que a interface aciona.
 
@@ -150,8 +171,19 @@ class SpectraApp:
         if os.path.isfile(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, encoding="utf-8") as f:
-                    base.update(json.load(f))
-            except Exception:
+                    lido = json.load(f)
+                if not isinstance(lido, dict):
+                    raise ValueError("a configuracao nao e um objeto")
+                base.update(lido)
+            except ValueError:
+                # Arquivo ilegivel fica guardado ao lado. Sem isso a primeira
+                # gravacao o trocaria pelos padroes, e com ele iriam o mapa
+                # do gabinete e a contagem de LEDs de cada conector.
+                try:
+                    os.replace(CONFIG_FILE, CONFIG_FILE + ".corrompido")
+                except OSError:
+                    pass
+            except OSError:
                 pass
         return base
 
@@ -163,10 +195,10 @@ class SpectraApp:
                     k: self.renderer.settings[k]
                     for k in ("brightness", "gamma", "fps", "smoothing")}
                 self.config["enabled_devices"] = self.renderer.settings["enabled_devices"]
-            tmp = CONFIG_FILE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.config, f, indent=2, ensure_ascii=False)
-            os.replace(tmp, CONFIG_FILE)
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            # copia rasa: algumas rotas gravam chave nova sem a trava, e o
+            # json.dump iterando o proprio dicionario estouraria no meio
+            _grava_json(CONFIG_FILE, dict(self.config))
 
     def _openrgb_exe(self):
         """Acha o executavel do OpenRGB instalado, ou None."""
@@ -1335,7 +1367,12 @@ class SpectraApp:
     def list_profiles(self):
         """Lista os perfis salvos."""
         out = []
-        for fn in sorted(os.listdir(PROFILES_DIR)):
+        try:
+            nomes = os.listdir(PROFILES_DIR)
+        except OSError:
+            # sem a pasta nao ha perfil; estourar aqui derrubaria /api/state
+            return out
+        for fn in sorted(nomes):
             if fn.endswith(".json"):
                 out.append(fn[:-5])
         return out
@@ -1346,23 +1383,45 @@ class SpectraApp:
         if not safe:
             return {"ok": False, "error": "nome invalido"}
         path = os.path.join(PROFILES_DIR, safe + ".json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.renderer.scene_json(), f, indent=2, ensure_ascii=False)
-        self.config["last_profile"] = safe
-        self.save_config()
+        # com a trava: dois pedidos de salvar o mesmo nome, como num clique
+        # duplo, escreviam no mesmo temporario ao mesmo tempo e o perfil
+        # podia sair com os dois conteudos embaralhados
+        with self._lock:
+            os.makedirs(PROFILES_DIR, exist_ok=True)
+            _grava_json(path, self.renderer.scene_json())
+            self.config["last_profile"] = safe
+            self.save_config()
         return {"ok": True, "name": safe}
+
+    @staticmethod
+    def _caminho_perfil(name) -> str | None:
+        """Arquivo de um perfil pelo nome, ou None se o nome sair da pasta.
+
+        O nome vem da interface. Sem essa conferencia, "../config" carregaria
+        ou apagaria a propria configuracao, e com mais niveis qualquer .json
+        do disco ficaria ao alcance.
+        """
+        if not isinstance(name, str) or not name.strip():
+            return None
+        base = os.path.realpath(PROFILES_DIR)
+        path = os.path.realpath(os.path.join(base, name + ".json"))
+        if os.path.dirname(path) != base:
+            return None
+        return path
 
     def load_profile(self, name: str, apply_only=False):
         """Carrega um perfil salvo."""
-        path = os.path.join(PROFILES_DIR, name + ".json")
-        if not os.path.isfile(path):
+        path = self._caminho_perfil(name)
+        if path is None or not os.path.isfile(path):
             return False
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
+            # perfil com formato estranho vira recusa, e nao excecao: na
+            # abertura isso derrubaria a conexao inteira com o render parado
+            self.renderer.load_scene(data)
         except Exception:
             return False
-        self.renderer.load_scene(data)
         if not apply_only:
             self.config["last_profile"] = name
             self.save_config()
@@ -1372,8 +1431,8 @@ class SpectraApp:
 
     def delete_profile(self, name: str):
         """Apaga um perfil salvo."""
-        path = os.path.join(PROFILES_DIR, name + ".json")
-        if os.path.isfile(path):
+        path = self._caminho_perfil(name)
+        if path is not None and os.path.isfile(path):
             os.remove(path)
             return True
         return False
