@@ -270,8 +270,15 @@ class Canvas:
             for zi, zone in enumerate(live):
                 g = zcfg.get(str(zone.index)) or auto_placement(
                     dev, zone, slot, zi, len(live))
-                fn = SHAPES.get(g.get("shape", "line"), shape_line)
-                pts = fn(zone.leds_count, g)
+                try:
+                    fn = SHAPES.get(g.get("shape", "line"), shape_line)
+                    pts = fn(zone.leds_count, g)
+                except (TypeError, ValueError, AttributeError):
+                    # Geometria salva que nao se le, como coordenada nula, cai
+                    # no posicionamento automatico. Estourar aqui derrubaria a
+                    # montagem do canvas, e com ela a conexao a cada abertura.
+                    g = auto_placement(dev, zone, slot, zi, len(live))
+                    pts = SHAPES[g["shape"]](zone.leds_count, g)
                 if g.get("reverse"):
                     pts = pts[::-1].copy()
 
@@ -279,7 +286,13 @@ class Canvas:
                 if g.get("shape") == "multi":
                     off = 0
                     for part in (g.get("parts") or []):
-                        c = min(int(part.get("count", 0)), zone.leds_count - off)
+                        # peca ilegivel depois da zona cheia: a forma a ignora
+                        # e aqui tambem, senao ela derrubaria o canvas
+                        try:
+                            c = min(int(part.get("count", 0)),
+                                    zone.leds_count - off)
+                        except (TypeError, ValueError, AttributeError):
+                            continue
                         if c <= 0:
                             continue
                         self.pieces.append((zone_start + off, c))

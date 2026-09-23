@@ -304,6 +304,33 @@ class TestCanvas:
         pts = cv.pos[zi["start"]:zi["start"] + zi["count"]]
         assert np.allclose(pts, [[0.11, 0.22]] * zi["count"])
 
+    @pytest.mark.parametrize("geo", [
+        {"shape": "line", "x1": None, "y1": 0.5, "x2": 0.9, "y2": 0.5},
+        {"shape": "ring", "cx": "meio", "cy": 0.5, "radius": 0.1},
+        {"shape": "multi", "parts": [{"shape": "ring", "count": None}]},
+        ["nao", "e", "geometria"],
+    ])
+    def test_geometria_ilegivel_cai_no_automatico(self, devices, geo):
+        # config editada a mao ou coordenada nula vinda da interface: sem
+        # isso o canvas nao montava e o app nao conectava mais
+        chave = device_key(devices[1])
+        cv = Canvas(devices, config={chave: {"zones": {"0": geo}}})
+        auto = Canvas(devices)
+        assert cv.n == auto.n
+        assert np.array_equal(cv.pos, auto.pos)
+
+    @pytest.mark.parametrize("sobra", [{"count": None}, "nao e peca"])
+    def test_peca_ilegivel_depois_da_zona_cheia_e_ignorada(self, devices, sobra):
+        # a zona de 8 LEDs ja fecha na primeira peca; a segunda nunca vira
+        # ponto, e nao pode derrubar o canvas na contagem das pecas
+        chave = device_key(devices[1])
+        geo = {"shape": "multi",
+               "parts": [{"shape": "line", "count": 8}, sobra]}
+        cv = Canvas(devices, config={chave: {"zones": {"0": geo}}})
+        zi = next(z for z in cv.zone_info if z["device_key"] == chave)
+        assert zi["count"] == 8
+        assert (zi["start"], 8) in cv.pieces
+
     def test_reverse_inverte_a_zona(self, devices):
         chave = device_key(devices[1])
         base = {"shape": "line", "x1": 0.0, "y1": 0.5, "x2": 1.0, "y2": 0.5}
