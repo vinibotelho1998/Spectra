@@ -185,6 +185,12 @@ class TestEscopo:
     def test_existe_efeito_com_escopo(self):
         assert self.ids_com_escopo()
 
+    def test_rotulo_nao_repete_o_campo_de_alvos(self):
+        # "Aplicar em" e o campo dos alvos da camada, no mesmo painel
+        for e in self.ids_com_escopo():
+            q = next(q for q in fx.EFFECTS[e].params if q["name"] == "scope")
+            assert q["label"] != "Aplicar em", e
+
     @pytest.mark.parametrize("eid", sorted(
         e for e in IDS
         if any(q["name"] == "scope" for q in fx.EFFECTS[e].params)))

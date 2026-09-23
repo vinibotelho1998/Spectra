@@ -142,3 +142,203 @@ class TestQueda:
         k.fechar()
         assert k._modo is None
         assert k.conectado is False
+
+
+class Relogio:
+    """Relogio parado que so anda quando o teste manda."""
+
+    def __init__(self):
+        self.agora = 100.0
+
+    def monotonic(self):
+        return self.agora
+
+    def sleep(self, s):
+        self.agora += s
+
+
+class TestEnvio:
+    """O que sai para o teclado, com o HID trocado por um que so anota."""
+
+    @pytest.fixture
+    def kb(self, monkeypatch):
+        enviados = []
+        falhas = []
+
+        def set_feature(h, buf, n):
+            assert n == 65
+            dados = bytes(buf.raw)
+            assert dados[0] == 0
+            enviados.append(dados[1:])
+            return 0 if falhas and falhas.pop(0) else 1
+
+        relogio = Relogio()
+        monkeypatch.setattr(akko, "_hid", types.SimpleNamespace(
+            HidD_SetFeature=set_feature))
+        monkeypatch.setattr(akko, "_k32", types.SimpleNamespace(
+            CloseHandle=lambda h: None))
+        monkeypatch.setattr(akko, "time", relogio)
+        k = akko.AkkoKeyboard()
+        k._h, k.tamanho, k.caminho = 77, 65, "hid#akko"
+        k.enviados, k.falhas, k.relogio = enviados, falhas, relogio
+        return k
+
+    def test_cor_fixa_vai_no_relatorio_do_driver(self, kb):
+        assert kb.set_cor(10, 20, 30, brilho=2) is True
+        assert kb.enviados == [akko.monta(akko.EFEITO_COR_FIXA,
+                                          akko.MODO_COR_UNICA, 2, 8, 10, 20, 30)]
+
+    def test_cor_logo_em_seguida_e_segurada(self, kb):
+        kb.set_cor(10, 20, 30)
+        kb.relogio.agora += akko.INTERVALO_MIN / 2
+        assert kb.set_cor(200, 20, 30) is False
+        assert len(kb.enviados) == 1
+
+    def test_cor_que_mal_mudou_nao_regrava(self, kb):
+        kb.set_cor(10, 20, 30)
+        kb.relogio.agora += 1.0
+        assert kb.set_cor(11, 21, 31) is False
+        assert kb.set_cor(10 + akko.DELTA_MIN, 20, 30) is True
+        assert len(kb.enviados) == 2
+
+    def test_so_o_brilho_mudando_tambem_vai(self, kb):
+        # o tom vai normalizado: a cena que so escurece muda so o brilho
+        kb.set_cor(255, 0, 0, brilho=4)
+        kb.relogio.agora += 1.0
+        assert kb.set_cor(255, 0, 0, brilho=2) is True
+        assert kb.enviados[-1][3] == 2
+
+    def test_brilho_fora_da_escala_e_limitado(self, kb):
+        kb.set_cor(1, 2, 3, brilho=9)
+        kb.set_cor(1, 2, 3, brilho=-3, forcar=True)
+        assert [p[3] for p in kb.enviados] == [akko.BRILHO_MAX, 0]
+
+    def test_apagar_passa_por_cima_da_espera(self, kb):
+        kb.set_cor(255, 255, 255)
+        assert kb.apagar() is True
+        assert kb.enviados[-1][5:8] == b"\x00\x00\x00"
+
+    def test_sem_handle_nada_sai(self, kb):
+        kb._h = None
+        assert kb.set_cor(1, 2, 3, forcar=True) is False
+        assert kb.cor_em_fluxo(1, 2, 3) is False
+        assert kb.set_camada({}) is False
+        assert kb.enviados == []
+
+    def test_fluxo_entra_no_modo_de_sincronia_uma_vez(self, kb):
+        assert kb.cor_em_fluxo(1, 2, 3) is True
+        kb.relogio.agora += 1.0
+        assert kb.cor_em_fluxo(4, 5, 6) is True
+        assert kb.enviados == [
+            akko.monta(akko.EFEITO_SINCRONIA_TELA, akko.MODO_COR_UNICA,
+                       akko.BRILHO_MAX, 0, 255, 255, 255),
+            akko.monta_cor_tela(1, 2, 3),
+            akko.monta_cor_tela(4, 5, 6),
+        ]
+
+    def test_fluxo_respeita_a_taxa_do_firmware(self, kb):
+        kb.cor_em_fluxo(1, 2, 3)
+        kb.relogio.agora += 1.0
+        kb.cor_em_fluxo(1, 2, 3)
+        kb.relogio.agora += 0.5 / akko.FLUXO_HZ
+        assert kb.cor_em_fluxo(9, 9, 9) is False
+        kb.relogio.agora += 1.0 / akko.FLUXO_HZ
+        assert kb.cor_em_fluxo(9, 9, 9) is True
+        assert kb.enviados[-1] == akko.monta_cor_tela(9, 9, 9)
+
+    def test_modo_recusado_nao_manda_a_cor_e_tenta_de_novo(self, kb):
+        kb.falhas.append(True)
+        assert kb.cor_em_fluxo(1, 2, 3) is False
+        assert len(kb.enviados) == 1
+        kb.relogio.agora += 1.0
+        assert kb.cor_em_fluxo(1, 2, 3) is True
+        assert kb.enviados[1][1] == akko.EFEITO_SINCRONIA_TELA
+
+    def test_cor_fixa_depois_do_fluxo_volta_a_pedir_o_modo(self, kb):
+        kb.cor_em_fluxo(1, 2, 3)
+        kb.set_cor(9, 9, 9, forcar=True)
+        kb.relogio.agora += 1.0
+        kb.cor_em_fluxo(1, 2, 3)
+        assert kb.enviados[-2][1] == akko.EFEITO_SINCRONIA_TELA
+
+    def test_camada_liga_o_efeito_personalizado_antes_dos_dados(self, kb):
+        assert kb.set_camada({akko.TECLAS["w"]: (255, 0, 0)}) is True
+        assert kb.enviados[0][:2] == bytes([akko.CMD_LUZ, akko.EFEITO_PERSONALIZADO])
+        assert kb.enviados[1:] == akko.pacotes_camada({akko.TECLAS["w"]: (255, 0, 0)})
+        kb.set_camada({})
+        assert len(kb.enviados) == 1 + 7 + 7
+
+    def test_camada_que_falha_no_meio_devolve_falso(self, kb):
+        kb.set_camada({})
+        kb.falhas.extend([False, False, True])
+        assert kb.set_camada({}) is False
+        assert len(kb.enviados) == 1 + 7 + 3
+
+
+class TestCorEmFluxo:
+
+    def test_relatorio_do_modo_de_tela(self):
+        p = akko.monta_cor_tela(0x12, 0x34, 0x56)
+        assert len(p) == 64
+        assert list(p[:4]) == [akko.CMD_COR_TELA, 0x12, 0x34, 0x56]
+        assert soma_confere(p, 7)
+        assert not any(p[8:])
+
+    def test_valor_fora_do_byte_nao_estoura(self):
+        p = akko.monta_cor_tela(256 + 7, -1, 255.9)
+        assert list(p[1:4]) == [7, 255, 255]
+
+
+class TestAbrir:
+
+    def _com(self, monkeypatch, achado, handle=55):
+        abertos = []
+
+        def create(caminho, *a):
+            abertos.append(caminho)
+            return handle
+
+        monkeypatch.setattr(akko, "_procura", achado)
+        monkeypatch.setattr(akko, "_k32", types.SimpleNamespace(
+            CreateFileW=create, CloseHandle=lambda h: None))
+        return abertos
+
+    def test_acha_e_abre_a_interface_de_configuracao(self, monkeypatch):
+        abertos = self._com(monkeypatch, lambda: ("hid#vid_3151", 65))
+        k = akko.AkkoKeyboard()
+        assert k.abrir() is True
+        assert (k.caminho, k.tamanho, k.conectado) == ("hid#vid_3151", 65, True)
+        assert abertos == ["hid#vid_3151"]
+        assert k.to_json()["connected"] is True
+
+    def test_ja_aberto_nao_procura_de_novo(self, monkeypatch):
+        chamadas = []
+        self._com(monkeypatch, lambda: chamadas.append(1) or ("hid#x", 65))
+        k = akko.AkkoKeyboard()
+        k.abrir()
+        k.abrir()
+        assert chamadas == [1]
+
+    def test_sem_teclado_diz_que_nao_achou(self, monkeypatch):
+        abertos = self._com(monkeypatch, lambda: (None, 0))
+        k = akko.AkkoKeyboard()
+        assert k.abrir() is False
+        assert "nao encontrado" in k.erro
+        assert abertos == []
+        assert k.to_json()["connected"] is False
+
+    def test_interface_trancada_por_outro_programa(self, monkeypatch):
+        self._com(monkeypatch, lambda: ("hid#x", 65), handle=akko.INVALIDO)
+        k = akko.AkkoKeyboard()
+        assert k.abrir() is False
+        assert "sem acesso" in k.erro
+        assert k.conectado is False
+
+    def test_erro_do_windows_na_procura_nao_escapa(self, monkeypatch):
+        def quebra():
+            raise OSError("SetupDi falhou")
+
+        self._com(monkeypatch, quebra)
+        k = akko.AkkoKeyboard()
+        assert k.abrir() is False
+        assert "SetupDi" in k.erro

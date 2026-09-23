@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from spectra.engine.palette import (
+    PALETTE_LABELS,
     PALETTES,
     get_lut,
     hex_to_rgb,
@@ -90,6 +91,11 @@ class TestPaletas:
 
     def test_o_catalogo_nao_esta_vazio(self):
         assert len(PALETTES) >= 8
+
+    @pytest.mark.parametrize("nome", sorted(PALETTES))
+    def test_toda_paleta_tem_rotulo_para_a_interface(self, nome):
+        # sem rotulo a tela mostrava o nome interno, como "mono_red"
+        assert PALETTE_LABELS.get(nome, "").strip()
 
     @pytest.mark.parametrize("nome", sorted(PALETTES))
     def test_toda_parada_e_hex_valido(self, nome):

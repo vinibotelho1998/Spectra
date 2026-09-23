@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import types
 
 import pytest
 
@@ -162,3 +163,65 @@ class TestMinimizarOpenRGB:
                           {21: (200, "OpenRGB")})
         assert exclusive.minimize_openrgb() is False
         assert u.minimizadas == []
+
+
+class TestFechamento:
+    """taskkill trocado por um falso: nenhum processo cai de verdade."""
+
+    def _taskkill(self, monkeypatch, resultado):
+        pedidos = []
+
+        def run(args, **kw):
+            pedidos.append(list(args))
+            r = resultado(int(args[2]))
+            if isinstance(r, Exception):
+                raise r
+            return types.SimpleNamespace(returncode=r)
+
+        monkeypatch.setattr(exclusive.subprocess, "run", run)
+        return pedidos
+
+    def test_fecha_so_os_concorrentes_pelo_pid(self, monkeypatch):
+        _maquina(monkeypatch, [(40, "icue", "iCUE.exe"),
+                               (60, "openrgb", "OpenRGB.exe"),
+                               (61, "explorer", "explorer.exe")], {})
+        pedidos = self._taskkill(monkeypatch, lambda pid: 0)
+        r = exclusive.enforce()
+        assert pedidos == [["taskkill", "/PID", "40", "/T", "/F"]]
+        assert [a["pid"] for a in r["fechados"]] == [40]
+        assert r["falhou"] == [] and r["total"] == 1
+
+    def test_separa_o_que_caiu_do_que_resistiu(self, monkeypatch):
+        _maquina(monkeypatch, [(40, "icue", "iCUE.exe"),
+                               (41, "signalrgb", "SignalRgb.exe"),
+                               (42, "lconnect", "LConnect.exe")], {})
+        self._taskkill(monkeypatch, {40: 0, 41: 1,
+                                     42: OSError("acesso negado")}.get)
+        r = exclusive.enforce()
+        assert [a["pid"] for a in r["fechados"]] == [40]
+        assert [a["pid"] for a in r["falhou"]] == [41, 42]
+        assert r["total"] == 3
+
+    def test_sem_concorrente_nao_chama_o_taskkill(self, monkeypatch):
+        _maquina(monkeypatch, [(61, "explorer", "explorer.exe")], {})
+        pedidos = self._taskkill(monkeypatch, lambda pid: 0)
+        assert exclusive.enforce() == {"fechados": [], "falhou": [], "total": 0}
+        assert pedidos == []
+
+
+class TestListaDeProcessos:
+
+    def test_linhas_que_nao_sao_processo_ficam_de_fora(self, monkeypatch):
+        _console_falso(monkeypatch, b'"iCUE.exe","12","Console"\r\n'
+                                    b'"sem pid"\r\n'
+                                    b'"Quebrado.exe","abc"\r\n'
+                                    b'"Sistema","4"\r\n')
+        assert exclusive._listar_processos() == [(12, "icue", "iCUE.exe"),
+                                                 (4, "sistema", "Sistema")]
+
+    def test_tasklist_indisponivel_devolve_lista_vazia(self, monkeypatch):
+        def quebra(args, **kw):
+            raise FileNotFoundError("tasklist")
+
+        monkeypatch.setattr(subprocess, "run", quebra)
+        assert exclusive._listar_processos() == []

@@ -6,12 +6,20 @@ import pytest
 
 from spectra.core.protocol import (
     CLIENT_PROTOCOL_VERSION,
+    DEVICE_LIST_UPDATED,
     HEADER,
     MAGIC,
     MODE_FLAG_AUTOMATIC_SAVE,
     MODE_FLAG_HAS_PER_LED_COLOR,
     MODE_FLAG_HAS_SPEED,
     REQUEST_CONTROLLER_COUNT,
+    REQUEST_PROTOCOL_VERSION,
+    RESIZEZONE,
+    SET_CLIENT_NAME,
+    SET_CUSTOM_MODE,
+    UPDATE_LEDS,
+    UPDATE_MODE,
+    UPDATE_ZONE_LEDS,
     Device,
     LayoutMismatch,
     Mode,
@@ -457,3 +465,166 @@ class TestCliente:
         c.close()
         c.close()
         assert c.sock is None
+
+
+def pacote(dev, cmd, data=b""):
+    return HEADER.pack(MAGIC, dev, cmd, len(data)) + data
+
+
+def abre(pkt):
+    magic, dev, cmd, size = HEADER.unpack(pkt[:HEADER.size])
+    assert magic == MAGIC
+    data = pkt[HEADER.size:]
+    assert len(data) == size
+    return dev, cmd, data
+
+
+class SocketRoteiro:
+    """Servidor de mentira: responde o que o teste escreveu, byte a byte."""
+
+    def __init__(self, respostas=b""):
+        self.enviados = []
+        self.buf = bytearray(respostas)
+        self.opcoes = []
+
+    def sendall(self, data):
+        self.enviados.append(bytes(data))
+
+    def recv(self, n):
+        n = min(n, len(self.buf), 5)
+        out, self.buf = bytes(self.buf[:n]), self.buf[n:]
+        return out
+
+    def setsockopt(self, *a):
+        self.opcoes.append(a)
+
+    def settimeout(self, t):
+        self.timeout = t
+
+    def close(self):
+        pass
+
+
+def _cliente(respostas=b""):
+    c = OpenRGBClient()
+    c.sock = SocketRoteiro(respostas)
+    return c
+
+
+class TestPacotesDeCor:
+    """O formato que o servidor espera, campo a campo."""
+
+    def test_quadro_inteiro(self):
+        c = _cliente()
+        cores = b"\x01\x02\x03\x00\x04\x05\x06\x00"
+        c.update_leds(3, cores, 2)
+        dev, cmd, data = abre(c.sock.enviados[0])
+        assert (dev, cmd) == (3, UPDATE_LEDS)
+        assert struct.unpack_from("<IH", data) == (len(data), 2)
+        assert data[6:] == cores
+
+    def test_uma_zona(self):
+        c = _cliente()
+        cores = b"\xff\x00\x00\x00" * 3
+        c.update_zone_leds(1, 2, cores, 3)
+        dev, cmd, data = abre(c.sock.enviados[0])
+        assert (dev, cmd) == (1, UPDATE_ZONE_LEDS)
+        assert struct.unpack_from("<IIH", data) == (len(data), 2, 3)
+        assert data[10:] == cores
+
+    def test_contagem_da_zona(self):
+        c = _cliente()
+        c.resize_zone(0, 1, 40)
+        dev, cmd, data = abre(c.sock.enviados[0])
+        assert (dev, cmd) == (0, RESIZEZONE)
+        assert struct.unpack("<ii", data) == (1, 40)
+
+
+class TestTrocaDeModo:
+
+    def _com(self, modos, proto=5):
+        c = _cliente()
+        c.protocol = proto
+        c.devices = [Device(0, 1, "X", "", "", "", "", "", modos, 9, [], [], [])]
+        return c
+
+    def test_manda_o_modo_direto_com_o_indice_e_o_tamanho(self):
+        direto = make_mode(2, "Direct")
+        c = self._com([make_mode(0, "Static", MODE_FLAG_HAS_SPEED), direto])
+        assert c.set_direct_mode(0) is True
+        dev, cmd, data = abre(c.sock.enviados[0])
+        assert cmd == UPDATE_MODE
+        tam, indice = struct.unpack_from("<Ii", data)
+        assert (tam, indice) == (len(data), 2)
+        assert data[8:] == _serialize_mode(direto, 5)
+        assert c.devices[0].active_mode == 2
+
+    def test_modo_segue_a_versao_negociada(self):
+        direto = make_mode(0, "Direct")
+        c = self._com([direto], proto=2)
+        c.set_direct_mode(0)
+        assert abre(c.sock.enviados[0])[2][8:] == _serialize_mode(direto, 2)
+
+    def test_sem_modo_direto_pede_o_personalizado_e_diz_que_nao(self):
+        c = self._com([make_mode(0, "Rainbow", MODE_FLAG_HAS_SPEED)])
+        assert c.set_direct_mode(0) is False
+        assert abre(c.sock.enviados[0])[:2] == (0, SET_CUSTOM_MODE)
+        assert c.devices[0].active_mode == 9
+
+    def test_sem_modo_direto_e_sem_conexao_nao_levanta(self):
+        c = self._com([make_mode(0, "Rainbow", MODE_FLAG_HAS_SPEED)])
+        c.sock = None
+        assert c.set_direct_mode(0) is False
+
+
+class TestConversa:
+
+    def test_resposta_espera_o_comando_pedido(self):
+        # o aviso de lista mudou chega no meio, sem ninguem ter pedido
+        c = _cliente(pacote(0, DEVICE_LIST_UPDATED)
+                     + pacote(0, 77, b"outro")
+                     + pacote(0, REQUEST_CONTROLLER_COUNT, struct.pack("<I", 4)))
+        assert c.controller_count() == 4
+        assert abre(c.sock.enviados[0])[:2] == (0, REQUEST_CONTROLLER_COUNT)
+        assert c.sock.buf == b""
+
+    def test_magic_errado_e_erro_de_protocolo(self):
+        c = _cliente(b"XXXX" + bytes(12))
+        with pytest.raises(OpenRGBError, match="magic"):
+            c._recv_packet()
+
+    @pytest.mark.parametrize("servidor, esperado", [(3, 3), (5, 5), (9, 5)])
+    def test_versao_negociada_e_a_menor_das_duas(self, servidor, esperado):
+        c = _cliente(pacote(0, REQUEST_PROTOCOL_VERSION,
+                            struct.pack("<I", servidor)))
+        c._negotiate()
+        assert c.protocol == esperado
+        dev, cmd, data = abre(c.sock.enviados[0])
+        assert cmd == REQUEST_PROTOCOL_VERSION
+        assert struct.unpack("<I", data) == (CLIENT_PROTOCOL_VERSION,)
+
+    def test_servidor_antigo_que_nao_responde_a_versao_fica_na_zero(self):
+        c = _cliente(b"")
+        c._negotiate()
+        assert c.protocol == 0
+
+    def test_conectar_se_apresenta_e_negocia(self, monkeypatch):
+        from spectra.core import protocol as proto_mod
+        sock = SocketRoteiro(pacote(0, REQUEST_PROTOCOL_VERSION,
+                                    struct.pack("<I", 4)))
+        pedidos = []
+
+        def create_connection(addr, timeout):
+            pedidos.append((addr, timeout))
+            return sock
+
+        monkeypatch.setattr(proto_mod.socket, "create_connection",
+                            create_connection)
+        c = OpenRGBClient("127.0.0.1", 6799, name="Spectra")
+        c.connect(timeout=1.5)
+        assert pedidos == [(("127.0.0.1", 6799), 1.5)]
+        assert abre(sock.enviados[0]) == (0, SET_CLIENT_NAME, b"Spectra\x00")
+        assert abre(sock.enviados[1])[1] == REQUEST_PROTOCOL_VERSION
+        assert c.protocol == 4
+        assert c.connected is True
+        assert sock.timeout == 1.5

@@ -141,6 +141,37 @@ class TestShapes:
     def test_multi_sem_partes_nao_quebra(self):
         assert shape_multi(6, {}).shape == (6, 2)
 
+    def test_cable_ao_longo_alterna_as_lanes_led_a_led(self):
+        g = {"lanes": 2, "width": 0.4, "order": "along",
+             "x1": 0.0, "y1": 0.5, "x2": 1.0, "y2": 0.5}
+        pts = shape_cable(8, g)
+        # LED par numa fileira, impar na outra, andando junto pelo cabo
+        assert np.allclose(pts[0::2, 1], pts[0, 1])
+        assert np.allclose(pts[1::2, 1], pts[1, 1])
+        assert pts[0, 1] != pytest.approx(pts[1, 1])
+        assert pts[0, 0] == pytest.approx(pts[1, 0])
+        assert pts[2, 0] > pts[0, 0]
+
+    def test_cable_em_serpentina_volta_na_lane_seguinte(self):
+        g = {"lanes": 2, "x1": 0.0, "y1": 0.5, "x2": 1.0, "y2": 0.5,
+             "serpentine": True}
+        pts = shape_cable(8, g)
+        assert pts[3, 0] == pytest.approx(pts[4, 0])
+        assert pts[7, 0] == pytest.approx(pts[0, 0])
+
+    def test_multi_invertida_e_peca_vazia(self):
+        base = {"shape": "line", "count": 4, "x1": 0.0, "y1": 0.5,
+                "x2": 1.0, "y2": 0.5}
+        reto = shape_multi(4, {"parts": [base]})
+        pts = shape_multi(4, {"parts": [{"shape": "line", "count": 0},
+                                        dict(base, reverse=True)]})
+        assert np.allclose(pts, reto[::-1])
+
+    def test_multi_corta_a_peca_que_passa_da_zona(self):
+        pts = shape_multi(5, {"parts": [{"shape": "line", "count": 4},
+                                        {"shape": "line", "count": 4}]})
+        assert pts.shape == (5, 2)
+
 
 class TestAutoPlacement:
 

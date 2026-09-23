@@ -26,6 +26,16 @@ class TestCatalogo:
     def test_id_unico(self):
         assert len(POR_ID) == len(set(POR_ID))
 
+    def test_nome_unico(self):
+        # dois "Espiral" na vitrine nao se distinguiam no aviso nem no painel
+        nomes = [p.name for p in TODOS]
+        assert len(nomes) == len(set(nomes))
+
+    def test_vitrine_abre_pelo_que_serve_a_qualquer_gabinete(self):
+        cats = [g["category"] for g in presets.catalog()]
+        assert cats[0] == "Essenciais"
+        assert cats.index("Cabo") > cats.index("Sensores")
+
     @pytest.mark.parametrize("pid", POR_ID)
     def test_by_id_encontra(self, pid):
         assert presets.by_id(pid) is not None
@@ -159,3 +169,50 @@ class TestExecucao:
                 assert out.shape == (ctx.n, 3)
                 assert np.isfinite(out).all(), \
                     "%s quebrou na camada %s" % (pid, c["effect"])
+
+
+class TestIsolamento:
+    """Aplicar um preset e mexer na cena nao pode mudar o preset guardado."""
+
+    def test_camada_montada_nao_divide_o_dicionario(self):
+        a = presets.L("static")
+        b = presets.L("static")
+        a["params"]["color"] = "#123456"
+        assert b["params"] == {}
+        assert a["name"] == "static" and a["targets"] == []
+
+    def test_mexer_na_cena_carregada_nao_altera_o_preset(self, devices):
+        from spectra.engine.renderer import Renderer
+
+        p = next(p for p in TODOS if camadas(p)[0]["params"])
+        antes = json.dumps(p.scene(), sort_keys=True)
+        r = Renderer(None, devices)
+        r.load_scene(p.scene())
+        for camada in r.layers:
+            camada.params["intensity"] = 0.0
+            camada.targets.append("Mobo#0")
+        assert json.dumps(p.scene(), sort_keys=True) == antes
+
+
+class TestVitrine:
+
+    def test_categoria_fora_da_ordem_vai_para_outros(self, monkeypatch):
+        avulso = presets.Preset("teste_avulso", "Avulso", "Inventada", "d",
+                                "#000000", [presets.L("static")], refined=False)
+        monkeypatch.setattr(presets, "PRESETS", TODOS + [avulso])
+        cats = presets.catalog()
+        assert cats[-1]["category"] == "Outros"
+        assert [i["id"] for i in cats[-1]["presets"]] == ["teste_avulso"]
+        assert cats[-1]["refined"] == 0
+
+    def test_contagem_de_refinados_por_categoria(self):
+        for cat in presets.catalog():
+            assert cat["refined"] == sum(1 for i in cat["presets"] if i["refined"])
+
+    def test_json_conta_as_camadas_e_as_fontes(self):
+        p = presets.Preset("x", "X", "Audio", "d", "#fff",
+                           [presets.L("static"), presets.L("blackout")],
+                           needs=("audio",))
+        j = p.to_json()
+        assert j["layer_count"] == 2
+        assert j["needs"] == ["audio"]
