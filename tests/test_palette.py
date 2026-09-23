@@ -126,6 +126,18 @@ class TestPaletas:
         lut = get_lut(["#ff0000"])
         assert np.allclose(lut, lut[0])
 
+    def test_cache_nao_cresce_sem_teto(self):
+        # arrastar o seletor de cor gera uma lista nova a cada passo
+        from spectra.engine import palette as pal
+        try:
+            for i in range(1000):
+                get_lut(["#%06x" % i, "#000000"])
+            assert len(pal._CACHE) <= 256
+            assert get_lut(["#0003e7", "#000000"])[0] == pytest.approx(
+                hex_to_rgb("#0003e7"), abs=1e-3)
+        finally:
+            pal._CACHE.clear()
+
 
 class TestSample:
 

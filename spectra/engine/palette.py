@@ -97,6 +97,10 @@ PALETTE_NAMES = list(PALETTES.keys())
 
 _CACHE: dict[tuple, np.ndarray] = {}
 _LUT_SIZE = 512
+# Cada lista de cores escolhida pela pessoa vira uma tabela nova, e arrastar
+# o seletor de cor gera centenas delas. Sem teto o cache so cresce enquanto o
+# app fica na bandeja; refazer uma tabela custa pouco.
+_CACHE_MAX = 256
 
 
 def _stops_to_lut(stops: tuple) -> np.ndarray:
@@ -123,6 +127,8 @@ def get_lut(palette) -> np.ndarray:
     lut = _CACHE.get(stops)
     if lut is None:
         lut = _stops_to_lut(stops)
+        if len(_CACHE) >= _CACHE_MAX:
+            _CACHE.clear()
         _CACHE[stops] = lut
     return lut
 
