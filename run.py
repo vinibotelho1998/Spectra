@@ -14,11 +14,12 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
 
+from spectra import __version__
 from spectra.app import SpectraApp
 from spectra.core import exclusive
 from spectra.server import serve
 
-TITULO = "Spectra"
+TITULO = f"Spectra {__version__}"
 
 
 def main() -> int:

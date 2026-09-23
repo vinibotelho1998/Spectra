@@ -6,7 +6,11 @@ import time
 from ctypes import wintypes
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TITULO = "Spectra"
+sys.path.insert(0, RAIZ)
+
+from spectra import __version__
+
+TITULO = f"Spectra {__version__}"
 u = ctypes.WinDLL("user32", use_last_error=True)
 u.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
                            wintypes.LPARAM]

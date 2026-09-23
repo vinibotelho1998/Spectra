@@ -13,6 +13,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import __version__
 from . import effects as fx
 from .app import ROOT, SpectraApp
 
@@ -160,7 +161,15 @@ class Handler(BaseHTTPRequestHandler):
         if ctype.startswith("text/") or ctype in ("application/javascript",):
             ctype += "; charset=utf-8"
         with open(path, "rb") as f:
-            self._send(200, f.read(), ctype)
+            corpo = f.read()
+        # a versao entra na hora de servir, lida do pacote: o numero do topo
+        # acompanha o app sem ninguem editar a pagina. A comparacao ignora
+        # maiusculas como o disco do Windows, que entrega a mesma pagina
+        # para `/INDEX.HTML`
+        if os.path.normcase(path) == os.path.normcase(
+                os.path.join(os.path.normpath(UI_DIR), "index.html")):
+            corpo = corpo.replace(b"{{versao}}", __version__.encode("utf-8"))
+        self._send(200, corpo, ctype)
 
     def do_GET(self):
         """Responde a API de leitura e entrega os arquivos da interface."""
