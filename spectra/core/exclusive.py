@@ -17,6 +17,8 @@ import ctypes
 import subprocess
 from ctypes import wintypes
 
+from .admin import SAIDA_CONSOLE
+
 CONCORRENTES = {
     "gcc": "GIGABYTE Control Center",
     "gigabytecontrolcenter": "GIGABYTE Control Center",
@@ -41,6 +43,13 @@ CONCORRENTES = {
 }
 
 PROTEGIDOS = {"openrgb", "python", "pythonw"}
+
+# Nome curto demais para decidir sozinho. `gcc` e o GIGABYTE Control Center,
+# mas tambem e o compilador GNU de toda instalacao MinGW e MSYS2, e derrubar
+# um build com a arvore de processos junto e pior do que deixar o concorrente
+# aberto. `viper` casa por prefixo com o ViPER4Windows, de audio. Para esses,
+# o caminho do executavel precisa ter uma das marcas do fabricante.
+CONFIRMA_CAMINHO = {"gcc": ("gigabyte",), "viper": ("patriot", "rgb")}
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 kernel32.CreateMutexW.restype = wintypes.HANDLE
@@ -94,7 +103,7 @@ def _listar_processos():
     try:
         r = subprocess.run(["tasklist", "/fo", "csv", "/nh"],
                            capture_output=True, text=True, timeout=15,
-                           creationflags=0x08000000)
+                           creationflags=0x08000000, **SAIDA_CONSOLE)
     except Exception:
         return []
     out = []
@@ -112,6 +121,15 @@ def _listar_processos():
     return out
 
 
+def _caminho_exe(pid: int) -> str:
+    """Caminho do executavel de um processo, ou vazio se nao der para ler."""
+    try:
+        import psutil
+        return psutil.Process(pid).exe() or ""
+    except Exception:
+        return ""
+
+
 def scan() -> list:
     """Lista os processos de software de RGB concorrente que estao rodando.
 
@@ -122,14 +140,21 @@ def scan() -> list:
     for pid, base, nome in _listar_processos():
         if base in PROTEGIDOS:
             continue
-        rotulo = CONCORRENTES.get(base)
-        if rotulo is None:
-            for chave, r in CONCORRENTES.items():
-                if base.startswith(chave):
-                    rotulo = r
+        chave = base if base in CONCORRENTES else None
+        if chave is None:
+            for c in CONCORRENTES:
+                if base.startswith(c):
+                    chave = c
                     break
-        if rotulo:
-            achados.append({"pid": pid, "processo": nome, "rotulo": rotulo})
+        if chave is None:
+            continue
+        marcas = CONFIRMA_CAMINHO.get(chave)
+        if marcas:
+            caminho = _caminho_exe(pid).lower()
+            if not any(m in caminho for m in marcas):
+                continue
+        achados.append({"pid": pid, "processo": nome,
+                        "rotulo": CONCORRENTES[chave]})
     return achados
 
 
@@ -146,7 +171,7 @@ def enforce() -> dict:
         try:
             r = subprocess.run(["taskkill", "/PID", str(a["pid"]), "/T", "/F"],
                                capture_output=True, text=True, timeout=15,
-                               creationflags=0x08000000)
+                               creationflags=0x08000000, **SAIDA_CONSOLE)
             (fechados if r.returncode == 0 else falhou).append(a)
         except Exception:
             falhou.append(a)
@@ -160,13 +185,26 @@ def minimize_openrgb() -> bool:
     O OpenRGB e a camada que o Spectra usa, entao nao se fecha. Mas a janela
     dele em primeiro plano confunde, e alguns modos da interface dele
     escrevem no hardware junto.
+
+    Vale so para janela de um processo do OpenRGB. Pelo titulo apenas, o
+    navegador aberto na pagina do projeto ou uma pasta chamada OpenRGB
+    tambem eram minimizados a cada abertura do Spectra.
     """
+    pids = {pid for pid, base, _nome in _listar_processos() if base == "openrgb"}
+    if not pids:
+        return False
     user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetWindowThreadProcessId.argtypes = [
+        wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     psapi_ok = []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def cb(hwnd, _lparam):
         if not user32.IsWindowVisible(hwnd):
+            return True
+        dono = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(dono))
+        if dono.value not in pids:
             return True
         buf = ctypes.create_unicode_buffer(256)
         user32.GetWindowTextW(hwnd, buf, 256)
