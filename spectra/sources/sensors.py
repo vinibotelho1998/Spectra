@@ -37,7 +37,10 @@ class _LhmBackend:
     def open(self) -> bool:
         """Carrega a DLL e liga os sensores, devolvendo se deu certo."""
         if not os.path.isfile(self.dll_path):
-            self.error = "LibreHardwareMonitorLib.dll nao encontrada em vendor/"
+            # o caminho inteiro: no app instalado a vendor/ do proprio app
+            # fica escondida em _internal, e "vendor/" sozinho nao leva a ela
+            self.error = ("LibreHardwareMonitorLib.dll nao encontrada em "
+                          + os.path.dirname(self.dll_path))
             return False
         try:
             import clr

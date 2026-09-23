@@ -30,9 +30,13 @@ class AudioSource:
     do app segue sem os efeitos reativos.
     """
 
-    def __init__(self, state, device_index=None, fft_size: int = 2048):
+    def __init__(self, state, device_index=None, fft_size: int = 2048,
+                 device_name: str | None = None):
         self.state = state
         self.device_index = device_index
+        # O indice do PortAudio muda quando se pluga outro dispositivo; o
+        # nome e o que identifica o escolhido de uma sessao para a outra.
+        self.device_wanted = device_name
         self.fft_size = fft_size
         self._stream = None
         self._pa = None
@@ -87,6 +91,20 @@ class AudioSource:
                 return lb
         raise RuntimeError("nenhum dispositivo de loopback casou com a saida padrao")
 
+    def _escolhido(self, p):
+        """Acha o dispositivo escolhido, pelo nome quando ele foi guardado.
+
+        Pelo indice so, plugar um fone trocava a numeracao e a captura abria
+        outro dispositivo sem ninguem perceber.
+        """
+        if self.device_wanted:
+            for lb in p.get_loopback_device_info_generator():
+                if lb["name"] == self.device_wanted:
+                    return lb
+            raise RuntimeError(f"o dispositivo {self.device_wanted} nao esta "
+                               "conectado; escolha outro na aba Fontes")
+        return p.get_device_info_by_index(int(self.device_index))
+
     def start(self):
         """Abre o fluxo de captura e comeca a analisar.
 
@@ -102,10 +120,10 @@ class AudioSource:
             return False
         try:
             self._pa = pa.PyAudio()
-            if self.device_index is None:
+            if self.device_index is None and not self.device_wanted:
                 info = self._default_loopback(self._pa)
             else:
-                info = self._pa.get_device_info_by_index(int(self.device_index))
+                info = self._escolhido(self._pa)
             self._rate = int(info["defaultSampleRate"])
             self.device_name = info["name"]
             ch = max(1, int(info["maxInputChannels"]))
