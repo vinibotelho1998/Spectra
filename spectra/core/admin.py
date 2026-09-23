@@ -22,6 +22,12 @@ from ctypes import wintypes
 
 NO_WINDOW = 0x08000000
 
+# Codificacao da saida de tasklist e taskkill. Mandando para um pipe eles
+# escrevem na pagina OEM, e nao na ANSI que o Python usaria por padrao: letra
+# como o "u" com trema cai num byte que a ANSI nao tem, a leitura estourava
+# dentro do subprocess e a saida chegava vazia.
+SAIDA_CONSOLE = {"encoding": "oem", "errors": "replace"}
+
 PAWNIO_DIRS = [
     r"C:\Program Files\PawnIO",
     r"C:\Program Files (x86)\PawnIO",
@@ -132,7 +138,7 @@ def _pids_openrgb() -> list:
         r = subprocess.run(["tasklist", "/fi", "IMAGENAME eq OpenRGB.exe",
                             "/fo", "csv", "/nh"],
                            capture_output=True, text=True, timeout=15,
-                           creationflags=NO_WINDOW)
+                           creationflags=NO_WINDOW, **SAIDA_CONSOLE)
     except Exception:
         return []
     pids = []
@@ -166,7 +172,7 @@ def encerrar_openrgb() -> bool:
     try:
         r = subprocess.run(["taskkill", "/IM", "OpenRGB.exe", "/T", "/F"],
                            capture_output=True, text=True, timeout=20,
-                           creationflags=NO_WINDOW)
+                           creationflags=NO_WINDOW, **SAIDA_CONSOLE)
         return r.returncode == 0
     except Exception:
         return False
