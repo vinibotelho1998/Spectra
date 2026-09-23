@@ -21,6 +21,19 @@ ASSETS_DIR = os.path.join(ROOT, "assets")
 
 HOSTS_LOCAIS = {"127.0.0.1", "localhost", "[::1]"}
 
+# Rotas que mexem na cena ou no hardware e so fazem sentido com o
+# renderizador de pe. Antes da primeira conexao elas estouravam com
+# "'NoneType' object has no attribute", que ia direto para a tela.
+PRECISA_MOTOR = {
+    "/api/layers", "/api/layer/add", "/api/layer/update", "/api/layer/remove",
+    "/api/layer/reorder", "/api/zone/geometry", "/api/zone/resize",
+    "/api/layout", "/api/layout/reset", "/api/probe/start",
+    "/api/probe/paint", "/api/probe/stop", "/api/probe/commit",
+    "/api/probe/multi/start", "/api/probe/multi/paint", "/api/probe/split",
+    "/api/probe/isolate", "/api/zone/identify", "/api/zone/plan",
+    "/api/preset/apply", "/api/profile/save", "/api/profile/load",
+}
+
 
 def _host_estranho(headers) -> bool:
     """Diz se o pedido chegou por um nome que nao e o loopback.
@@ -184,14 +197,19 @@ class Handler(BaseHTTPRequestHandler):
         a = self.app
         if self._foreign():
             return self._json({"error": "origem nao permitida"}, 403)
+        if p in PRECISA_MOTOR and a.renderer is None:
+            return self._json({"error": "ainda sem conexao com o OpenRGB: "
+                                        "nenhum LED esta sob controle"}, 503)
         b = self._body()
         try:
             if p == "/api/layers":
                 a.set_layers(b.get("layers", []),
-                             b["preset"] if "preset" in b else "keep")
+                             b["preset"] if "preset" in b else "keep",
+                             b.get("perfil"))
             elif p == "/api/layer/add":
                 return self._json(a.add_layer(b["effect"], **{
-                    k: b[k] for k in ("params", "blend", "opacity", "targets", "name")
+                    k: b[k] for k in ("params", "blend", "opacity", "targets",
+                                      "name", "acima_de")
                     if k in b}))
             elif p == "/api/layer/update":
                 return self._json({"layer": a.update_layer(b["id"], b.get("patch", {}))})
@@ -204,12 +222,16 @@ class Handler(BaseHTTPRequestHandler):
             elif p == "/api/zone/geometry":
                 a.set_zone_geometry(b["device"], int(b["zone"]), b["geometry"])
             elif p == "/api/zone/resize":
+                # o tamanho vai cru: campo vazio chega nulo, e quem responde
+                # com a frase certa e a conferencia do app
                 return self._json(a.resize_zone(b["device"], int(b["zone"]),
-                                                int(b["size"])))
+                                                b.get("size")))
             elif p == "/api/layout/reset":
-                a.reset_layout()
+                return self._json({"ok": True, "anterior": a.reset_layout()})
+            elif p == "/api/layout":
+                return self._json(a.set_layout(b.get("layout")))
             elif p == "/api/source":
-                a.set_source_config(b["kind"], b.get("config", {}))
+                return self._json(a.set_source_config(b["kind"], b.get("config", {})))
             elif p == "/api/probe/start":
                 return self._json(a.probe_start(b["device"], int(b["zone"]),
                                                 int(b.get("max", 256))))
@@ -244,16 +266,25 @@ class Handler(BaseHTTPRequestHandler):
             elif p == "/api/preset/apply":
                 return self._json(a.apply_preset(b["id"]))
             elif p == "/api/profile/save":
-                return self._json(a.save_profile(b["name"]))
+                return self._json(a.save_profile(b["name"],
+                                                 bool(b.get("sobrescrever"))))
             elif p == "/api/profile/load":
                 return self._json({"ok": a.load_profile(b["name"])})
             elif p == "/api/profile/delete":
                 return self._json({"ok": a.delete_profile(b["name"])})
+            elif p == "/api/favoritos":
+                return self._json(a.set_favoritos(b.get("ids")))
+            elif p == "/api/inventario":
+                return self._json(a.set_inventario(b.get("itens")))
+            elif p == "/api/janela/mostrar":
+                return self._json(a.mostrar_janela())
+            elif p == "/api/openrgb/exe":
+                return self._json(a.set_openrgb_exe(b.get("path")))
             elif p == "/api/exclusive":
                 if "enabled" in b:
                     a.config["exclusive_mode"] = bool(b["enabled"])
                     a.save_config()
-                return self._json(a.enforce_exclusive())
+                return self._json(a.enforce_exclusive(bool(b.get("forcar"))))
             elif p == "/api/teclado":
                 if "enabled" in b:
                     a.config["akko_keyboard"] = bool(b["enabled"])
@@ -276,7 +307,8 @@ class Handler(BaseHTTPRequestHandler):
         except KeyError as exc:
             return self._json({"error": f"parametro faltando: {exc}"}, 400)
         except Exception as exc:
-            return self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+            # o nome da excecao nao diz nada a quem usa; o motivo, as vezes diz
+            return self._json({"error": f"Nao consegui concluir: {exc}"}, 500)
         return self._json({"ok": True})
 
 

@@ -15,11 +15,21 @@ ICONE = os.path.join(RAIZ, "assets", "spectra.ico")
 ICONE_PNG = os.path.join(RAIZ, "assets", "spectra.png")
 
 
+def sessao_encerrando() -> bool:
+    """Diz se o Windows esta encerrando a sessao, por desligar ou sair."""
+    try:
+        import ctypes
+        SM_SHUTTINGDOWN = 0x2000
+        return bool(ctypes.windll.user32.GetSystemMetrics(SM_SHUTTINGDOWN))
+    except Exception:
+        return False
+
+
 class Tray:
-    """Icone de bandeja com abrir, pausar e sair.
+    """Icone de bandeja com abrir, apagar os LEDs e sair.
 
     O menu monta os rotulos por funcao, e nao por texto fixo, para que o
-    estado mostrado, LEDs, fps e se esta pausado, esteja certo toda vez que
+    estado mostrado, LEDs, fps e se esta apagado, esteja certo toda vez que
     o menu abre.
     """
 
@@ -38,22 +48,68 @@ class Tray:
         except Exception:
             pass
 
-    def _pausa_label(self, _item=None):
+    def _apagado(self) -> bool:
         r = getattr(self.app, "renderer", None)
-        pausado = bool(r and r.settings.get("paused"))
-        return "Retomar efeitos" if pausado else "Pausar efeitos"
+        try:
+            return bool(r) and float(r.settings.get("brightness", 1.0)) <= 0.0
+        except (TypeError, ValueError):
+            return False
 
-    def _alternar_pausa(self, *_):
-        r = getattr(self.app, "renderer", None)
-        if not r:
+    def _luz_label(self, _item=None):
+        return "Acender LEDs" if self._apagado() else "Apagar LEDs"
+
+    def _alternar_luz(self, *_):
+        """Apaga ou reacende tudo, pelo mesmo caminho do botao da janela.
+
+        Era uma pausa que apagava so o gabinete: o teclado, que recebe cor
+        do laco de render, ficava aceso na ultima cor, e a mesma palavra na
+        janela congelava em vez de apagar. Pelo brilho zero apaga os dois, e
+        acender volta ao brilho de antes.
+        """
+        if not getattr(self.app, "renderer", None):
             return
-        r.settings["paused"] = not r.settings.get("paused")
-        if r.settings["paused"]:
-            # Com a trava do renderizador o quadro que estava sendo desenhado
-            # sai antes do preto. Sem ela, ele chegava depois e o gabinete
-            # ficava aceso, congelado, em vez de apagar.
-            with r._lock:
-                r.blank()
+        if self._apagado():
+            self.app.update_settings({"brightness": self.app._brilho_aceso()})
+        else:
+            self.app.update_settings({"brightness": 0.0})
+
+    def ao_fechar(self) -> bool:
+        """Decide o que o X da janela faz: esconder na bandeja ou fechar.
+
+        Com a sessao do Windows encerrando fecha de verdade. Cancelar o
+        fechamento nessa hora fazia o Spectra aparecer como programa que
+        impede o desligamento, e os LEDs nao passavam pelo apagar do fim.
+        """
+        if self.quitting or not self.icon or sessao_encerrando():
+            self.quitting = True
+            return True
+        try:
+            self.window.hide()
+        except Exception:
+            pass
+        self._avisa_bandeja()
+        return False
+
+    def _avisa_bandeja(self):
+        """Na primeira vez que o X esconde a janela, diz onde o app foi parar.
+
+        Sem aviso a janela sumia calada, e quem nao conhece o icone da bandeja
+        achava que tinha fechado, com os LEDs ainda acesos.
+        """
+        cfg = getattr(self.app, "config", None)
+        if cfg is None or cfg.get("aviso_bandeja"):
+            return
+        try:
+            self.icon.notify("O Spectra continua aqui na bandeja, com os efeitos "
+                             "no ar. Para sair, use o menu deste icone.",
+                             "Spectra")
+        except Exception:
+            return
+        cfg["aviso_bandeja"] = True
+        try:
+            self.app.save_config()
+        except Exception:
+            pass
 
     def _sair(self, *_):
         self.quitting = True
@@ -90,7 +146,7 @@ class Tray:
             pystray.MenuItem("Abrir Spectra", self._mostrar, default=True),
             pystray.MenuItem(self._status, None, enabled=False),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(self._pausa_label, self._alternar_pausa),
+            pystray.MenuItem(self._luz_label, self._alternar_luz),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Sair", self._sair),
         )

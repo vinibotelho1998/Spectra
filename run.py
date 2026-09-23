@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 
 if sys.stdout is None:
@@ -29,11 +31,17 @@ def main() -> int:
                     help="nao apagar os LEDs ao sair")
     ap.add_argument("--allow-multiple", action="store_true",
                     help="permitir mais de uma instancia (so para depurar)")
+    ap.add_argument("--bandeja", action="store_true",
+                    help="abrir direto na bandeja, sem mostrar a janela")
     args = ap.parse_args()
 
     if not args.allow_multiple and not exclusive.acquire_single_instance():
+        if args.bandeja:
+            # o inicio com o Windows achou o app ja aberto: nada a mostrar
+            return 0
         print("[spectra] ja ha uma instancia rodando; trazendo para a frente")
-        exclusive.focus_existing_window(TITULO)
+        if not pedir_janela(args.port):
+            exclusive.focus_existing_window(TITULO)
         return 0
 
     app = SpectraApp(port=args.orgb_port)
@@ -64,7 +72,7 @@ def main() -> int:
             while True:
                 time.sleep(1)
         else:
-            code = run_window(url, app)
+            code = run_window(url, app, bandeja=args.bandeja)
     except KeyboardInterrupt:
         pass
     finally:
@@ -72,6 +80,32 @@ def main() -> int:
         httpd.shutdown()
         app.shutdown(blank=not args.keep_leds)
     return code
+
+
+def pedir_janela(porta: int) -> bool:
+    """Pede a instancia que ja esta rodando para mostrar a janela dela.
+
+    Fechar a janela so a esconde na bandeja, e uma janela escondida o Windows
+    nao traz para a frente pelo titulo: abrir o atalho de novo nao fazia
+    nada. Pela API local a primeira instancia mostra a propria janela.
+    """
+    try:
+        # quem foi aberto pela pessoa pode ceder o primeiro plano; sem isso o
+        # Windows mostra a janela da outra instancia atras das demais
+        import ctypes
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)
+    except Exception:
+        pass
+    pedido = urllib.request.Request(
+        f"http://127.0.0.1:{porta}/api/janela/mostrar", data=b"{}",
+        headers={"Content-Type": "application/json"}, method="POST")
+    # sem proxy: um proxy do sistema desviaria ate o pedido para o loopback
+    abridor = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with abridor.open(pedido, timeout=2.0) as r:
+            return bool(json.loads(r.read().decode("utf-8") or "{}").get("ok"))
+    except (OSError, ValueError):
+        return False
 
 
 def connect_in_background(app: SpectraApp) -> None:
@@ -94,7 +128,7 @@ def connect_in_background(app: SpectraApp) -> None:
         print("[spectra] seguindo sem hardware; a UI sobe mesmo assim")
 
 
-def run_window(url: str, app: SpectraApp) -> int:
+def run_window(url: str, app: SpectraApp, bandeja: bool = False) -> int:
     try:
         import webview
     except Exception as exc:
@@ -105,30 +139,25 @@ def run_window(url: str, app: SpectraApp) -> int:
 
     from spectra.tray import Tray, set_window_icon
 
-    window = webview.create_window(
-        TITULO, url, width=1420, height=900, min_size=(1060, 680),
-        background_color="#07090d")
-
-    estado = {"sair": False}
-
     def encerrar():
-        estado["sair"] = True
         try:
-            window.destroy()
+            tray.window.destroy()
         except Exception:
             pass
 
-    tray = Tray(window, app, encerrar)
+    # A bandeja sobe antes da janela: so com ela no ar da para abrir a
+    # janela escondida, senao nao haveria como mostrar o app depois.
+    tray = Tray(None, app, encerrar)
     if not tray.start():
         print("[spectra] bandeja indisponivel; fechar a janela vai encerrar")
 
-    def ao_fechar():
-        if estado["sair"] or not tray.icon:
-            return True
-        window.hide()
-        return False
+    window = webview.create_window(
+        TITULO, url, width=1420, height=900, min_size=(1060, 680),
+        background_color="#07090d", hidden=bool(bandeja and tray.icon))
+    tray.window = window
+    app.ao_mostrar_janela = tray._mostrar
 
-    window.events.closing += ao_fechar
+    window.events.closing += tray.ao_fechar
     window.events.loaded += lambda: set_window_icon(TITULO)
 
     try:

@@ -29,12 +29,13 @@ from . import effects as fx
 from .core.protocol import OpenRGBClient, OpenRGBError
 from .engine import blend
 from .engine.canvas import device_key
-from .engine.palette import PALETTE_NAMES, hex_to_rgb, palette_preview
+from .engine.palette import (PALETTE_LABELS, PALETTE_NAMES, hex_to_rgb,
+                             palette_preview)
 from .engine.renderer import Layer, Renderer
 from . import presets as ps
 from .sources.audio import AudioSource
 from .sources.screen import ScreenSource
-from .sources.sensors import SensorSource
+from .sources.sensors import VENDOR_DLL, SensorSource
 
 
 def _app_root() -> str:
@@ -95,6 +96,54 @@ DEFAULT_SCENE = {
                 "name": "Onda base"}],
     "settings": {"brightness": 1.0, "gamma": 2.2, "fps": 60, "smoothing": 0.0},
 }
+
+# Cena da primeira abertura. Sendo um preset, a vitrine o marca como tocando
+# e o painel Tocando agora diz o nome dele, em vez de "cena personalizada".
+PRESET_INICIAL = "arco_iris"
+
+# Leituras que so a LibreHardwareMonitorLib entrega. Uso de CPU e de RAM
+# vem do psutil e funciona sem ela.
+SENSORES_LHM = {"cpu_temp", "gpu_temp", "gpu_load", "fan_rpm"}
+
+ROTULO_SENSOR = {
+    "cpu_temp": "temperatura da CPU", "gpu_temp": "temperatura da GPU",
+    "cpu_load": "uso da CPU", "gpu_load": "uso da GPU",
+    "ram_load": "uso da RAM", "fan_rpm": "rotacao dos fans",
+}
+
+ROTULO_FONTE = {"audio": "audio", "screen": "captura de tela",
+                "sensors": "sensores"}
+
+
+def sensores_da_camada(effect_id: str, params=None) -> set:
+    """Leituras de sensor que uma camada consome.
+
+    E o que separa um efeito de uso da CPU, que roda so com o psutil, de um
+    de temperatura, que sem a DLL fica parado no frio sem aviso nenhum.
+    """
+    d = fx.get(effect_id)
+    if d is None or "sensors" not in d.needs:
+        return set()
+    if effect_id == "dual_sensor":
+        return {"cpu_temp", "gpu_temp"}
+    p = d.defaults()
+    p.update({k: v for k, v in (params or {}).items() if v is not None})
+    s = p.get("sensor")
+    return {s} if isinstance(s, str) else set()
+
+
+def _dll_sensores() -> str:
+    """Onde a LibreHardwareMonitorLib.dll e procurada.
+
+    Primeiro na pasta de configuracao, que no app instalado e
+    %LOCALAPPDATA%\\Spectra e aceita arquivo novo sem administrador; depois
+    na vendor/ do proprio app, que no instalado fica escondida dentro de
+    _internal. Sem ela em lugar nenhum vale o primeiro caminho, que e o que
+    o aviso da interface manda usar.
+    """
+    opcoes = [os.path.join(CONFIG_DIR, "vendor", os.path.basename(VENDOR_DLL)),
+              VENDOR_DLL]
+    return next((p for p in opcoes if os.path.isfile(p)), opcoes[0])
 
 
 def _port_open(host="127.0.0.1", port=6742, timeout=0.4) -> bool:
@@ -162,6 +211,13 @@ class SpectraApp:
         self._teclado_proxima = 0.0
         self._fonte_espera = {}
         self.cor_teclado = (0, 0, 0)
+        self._ultima_gravacao = 0.0
+        self._gravar_pendente = False
+        self.motivo_conexao = None
+        self.erro_conexao = None
+        # quem mostra a janela quando o app e aberto de novo; a janela nativa
+        # e da camada de cima, que registra aqui o proprio jeito de mostrar
+        self.ao_mostrar_janela = None
 
     def _load_config(self) -> dict:
         base = {"layout": {}, "enabled_devices": {}, "zone_sizes": {},
@@ -189,21 +245,67 @@ class SpectraApp:
         return base
 
     def save_config(self):
-        """Grava a configuracao em disco, criando o diretorio se faltar."""
+        """Grava a configuracao em disco, criando o diretorio se faltar.
+
+        A cena no ar vai junto. E ela que volta na proxima abertura, e nao o
+        ultimo perfil: quem aplicou um efeito e reiniciou o PC espera ver o
+        mesmo efeito, tenha salvo perfil ou nao.
+        """
         with self._lock:
             if self.renderer:
                 self.config["settings"] = {
                     k: self.renderer.settings[k]
                     for k in ("brightness", "gamma", "fps", "smoothing")}
                 self.config["enabled_devices"] = self.renderer.settings["enabled_devices"]
+                with self.renderer._lock:
+                    self.config["cena"] = {"layers": [
+                        dict(l.to_json(), params=dict(l.params),
+                             targets=list(l.targets))
+                        for l in self.renderer.layers]}
             os.makedirs(CONFIG_DIR, exist_ok=True)
             # copia rasa: algumas rotas gravam chave nova sem a trava, e o
             # json.dump iterando o proprio dicionario estouraria no meio
             _grava_json(CONFIG_FILE, dict(self.config))
+            self._ultima_gravacao = time.monotonic()
+            self._gravar_pendente = False
+
+    def _cena_mudou(self):
+        """Grava a cena que acabou de mudar, no maximo uma vez por segundo.
+
+        Arrastar um slider muda a camada vinte vezes por segundo, e cada
+        gravacao vai ate o disco. O que ficar para depois o vigia grava na
+        volta seguinte, e o encerramento grava de qualquer jeito.
+        """
+        if time.monotonic() - self._ultima_gravacao >= 1.0:
+            self.save_config()
+        else:
+            self._gravar_pendente = True
 
     def _openrgb_exe(self):
-        """Acha o executavel do OpenRGB instalado, ou None."""
+        """Acha o executavel do OpenRGB, ou None.
+
+        O caminho informado pela pessoa vem antes da lista, para quem usa a
+        versao portatil ou instalou fora de Program Files.
+        """
+        escolhido = self.config.get("openrgb_exe")
+        if isinstance(escolhido, str) and os.path.isfile(escolhido):
+            return escolhido
         return next((p for p in OPENRGB_CANDIDATES if os.path.isfile(p)), None)
+
+    def set_openrgb_exe(self, caminho) -> dict:
+        """Grava onde fica o OpenRGB.exe desta maquina.
+
+        So aceita um arquivo que existe e se chama OpenRGB.exe: esse caminho
+        vira a tarefa agendada que roda com privilegio maximo.
+        """
+        caminho = str(caminho or "").strip().strip('"')
+        if (os.path.basename(caminho).lower() != "openrgb.exe"
+                or not os.path.isfile(caminho)):
+            return {"ok": False,
+                    "error": "Nao achei o OpenRGB.exe nesse caminho"}
+        self.config["openrgb_exe"] = caminho
+        self.save_config()
+        return {"ok": True, "path": caminho}
 
     def _start_openrgb(self) -> bool:
         """Sobe o servidor, gastando o que puder para ele subir elevado.
@@ -222,6 +324,7 @@ class SpectraApp:
         exe = self._openrgb_exe()
         if not exe:
             self.status_msg = "OpenRGB nao encontrado"
+            self.motivo_conexao = "nao_instalado"
             return False
 
         if self.config.get("elevar_openrgb", True):
@@ -238,6 +341,8 @@ class SpectraApp:
                              close_fds=True)
         except Exception as exc:
             self.status_msg = f"falha ao iniciar OpenRGB: {exc}"
+            self.motivo_conexao = "falha_partida"
+            self.erro_conexao = str(exc)
             return False
         return True
 
@@ -247,10 +352,14 @@ class SpectraApp:
         Sem privilegio de administrador o OpenRGB nao abre o SMBus, e sem
         SMBus ele nao enxerga a memoria RAM nem parte dos controladores da
         placa-mae, entao `_start_openrgb` persegue o caminho elevado.
+
+        Quando nao consegue, deixa em `motivo_conexao` o porque, para a
+        interface dizer a acao certa em vez de uma instrucao generica.
         """
         if _port_open(self.host, self.port):
             return True
         if not self.config.get("autostart_openrgb"):
+            self.motivo_conexao = "partida_desligada"
             return False
         self.status_msg = "subindo o servidor OpenRGB"
         if not self._start_openrgb():
@@ -261,6 +370,7 @@ class SpectraApp:
                 return True
             time.sleep(0.5)
         self.status_msg = "OpenRGB nao respondeu a tempo"
+        self.motivo_conexao = "sem_resposta"
         return False
 
     def _liga_teclado(self):
@@ -274,7 +384,20 @@ class SpectraApp:
         """
         if not self.config.get("akko_keyboard", True):
             if self.renderer:
-                self.renderer.ambiente = None
+                # com a trava: um quadro no meio ainda pintaria o teclado
+                # depois do preto abaixo
+                with self.renderer._lock:
+                    self.renderer.ambiente = None
+            t = self.teclado
+            if t is not None and t.conectado:
+                # Solto sem isso, o teclado ficava para sempre na ultima cor,
+                # no modo de fluxo, e o cartao seguia dizendo que o Spectra
+                # controlava ele.
+                try:
+                    t.apagar()
+                    t.fechar()
+                except Exception:
+                    pass
             return
         if self.teclado is None:
             from .core.akko import AkkoKeyboard
@@ -532,10 +655,15 @@ class SpectraApp:
                 "elevacao": elev}
         return {"ok": ok, "elevacao": elev}
 
-    def enforce_exclusive(self) -> dict:
-        """Fecha os softwares de RGB concorrentes e relata o que caiu."""
+    def enforce_exclusive(self, forcar: bool = False) -> dict:
+        """Fecha os softwares de RGB concorrentes e relata o que caiu.
+
+        A chave da configuracao vale para a abertura. `forcar` e o botao de
+        fechar agora, que quem desligou o fechamento automatico usa quando
+        quer, e que antes nao fazia nada justamente para essa pessoa.
+        """
         from .core import exclusive
-        if not self.config.get("exclusive_mode", True):
+        if not forcar and not self.config.get("exclusive_mode", True):
             return {"ok": True, "skipped": True, "fechados": [], "falhou": []}
         r = exclusive.enforce()
         r["openrgb_minimizado"] = exclusive.minimize_openrgb()
@@ -568,10 +696,15 @@ class SpectraApp:
     def _connect(self, exclusive_pass: bool) -> bool:
         if exclusive_pass:
             try:
-                self.enforce_exclusive()
+                r = self.enforce_exclusive()
+                # so o aviso da abertura vai para a tela inicial; o botao de
+                # fechar agora ja responde na hora
+                r["ao_iniciar"] = True
             except Exception as exc:
                 self.last_error_exclusive = str(exc)
-        self.ensure_openrgb()
+        self.motivo_conexao = None
+        self.erro_conexao = None
+        aberto = self.ensure_openrgb()
         try:
             self.client.close()
             self.client.connect()
@@ -584,17 +717,33 @@ class SpectraApp:
                 devices = self.client.load_devices()
         except (OpenRGBError, OSError) as exc:
             self.connected = False
-            self.status_msg = f"sem conexao com o OpenRGB: {exc}"
+            if aberto or self.motivo_conexao is None:
+                self.motivo_conexao = "recusada"
+            # O detalhe do Windows fica a parte. Na barra do topo ele quebrava
+            # a linha e esmagava o resto; o aviso da tela inicial o mostra.
+            self.erro_conexao = str(exc)
+            self.status_msg = "sem conexao com o OpenRGB"
             return False
 
         self.connected = True
         self.status_msg = "conectado"
+        self.motivo_conexao = None
+        self.erro_conexao = None
         self._apply_zone_sizes(devices)
         self.check_elevacao()
 
         settings = dict(self.config.get("settings") or {})
         settings["enabled_devices"] = self.config.get("enabled_devices") or {}
         if self.renderer is None:
+            # Abrir o app e querer luz: o botao de apagar e para a noite, e o
+            # PC ligando com o gabinete escuro parece defeito. Volta o ultimo
+            # brilho aceso.
+            try:
+                apagado = float(settings.get("brightness", 1.0)) <= 0.0
+            except (TypeError, ValueError):
+                apagado = True
+            if apagado:
+                settings["brightness"] = self._brilho_aceso()
             self.renderer = Renderer(self.client, devices,
                                      self.config.get("layout"), settings)
             self._load_startup_scene()
@@ -644,6 +793,11 @@ class SpectraApp:
     def _watchdog_loop(self):
         delay = 2.0
         while not self._watchdog_stop.wait(delay):
+            if self._gravar_pendente:
+                try:
+                    self.save_config()
+                except Exception:
+                    pass
             self._vigia_teclado()
             r = self.renderer
             if r is None:
@@ -700,10 +854,31 @@ class SpectraApp:
                 pass
 
     def _load_startup_scene(self):
+        """Poe no ar a cena da sessao anterior.
+
+        So as camadas. Brilho, gama e taxa de quadros sao ajustes globais e
+        ja vieram da configuracao; carregar os de um perfil aqui desfazia
+        todo ajuste feito depois de salvar esse perfil. Faltando a cena
+        gravada, como na primeira abertura depois de atualizar, vale o
+        ultimo perfil e, sem ele, o preset de partida.
+        """
+        cena = self.config.get("cena")
+        camadas = cena.get("layers") if isinstance(cena, dict) else None
+        if isinstance(camadas, list) and camadas:
+            try:
+                self.renderer.set_layers([Layer.from_json(d) for d in camadas])
+                return
+            except Exception:
+                # cena gravada com formato estranho nao pode impedir a abertura
+                pass
         name = self.config.get("last_profile")
         if name and self.load_profile(name, apply_only=True):
             return
-        self.renderer.load_scene(DEFAULT_SCENE)
+        p = ps.by_id(PRESET_INICIAL)
+        camadas = p.scene()["layers"] if p else DEFAULT_SCENE["layers"]
+        self.renderer.set_layers([Layer.from_json(d) for d in camadas])
+        self.config["last_preset"] = p.id if p else None
+        self.config["perfil_atual"] = None
 
     def shutdown(self, blank=True):
         """Encerra tudo em ordem, apagando os LEDs por padrao."""
@@ -765,13 +940,17 @@ class SpectraApp:
             self._sync_sources_travado()
 
     def _sync_sources_travado(self):
+        if self.renderer is None:
+            # configurar a fonte antes da primeira conexao so grava a escolha
+            return
         need = self._needed_sources()
         ctx = self.renderer.ctx
 
         if "audio" in need:
             if self.audio is None:
-                dev = (self.config.get("sources", {}).get("audio") or {}).get("device")
-                self.audio = AudioSource(ctx.audio, device_index=dev)
+                cfg = self.config.get("sources", {}).get("audio") or {}
+                self.audio = AudioSource(ctx.audio, device_index=cfg.get("device"),
+                                         device_name=cfg.get("nome"))
             self._liga_fonte("audio", self.audio)
         elif self.audio and self.audio.running:
             self.audio.stop()
@@ -788,35 +967,116 @@ class SpectraApp:
 
         if "sensors" in need:
             if self.sensors is None:
-                self.sensors = SensorSource(ctx.sensors)
+                self.sensors = SensorSource(ctx.sensors, dll_path=_dll_sensores())
             self._liga_fonte("sensors", self.sensors)
         elif self.sensors and self.sensors.running:
             self.sensors.stop()
 
-    def set_layers(self, layers_json, preset="keep"):
+    def _sensores_possiveis(self) -> set:
+        """Leituras que a fonte de sensores consegue entregar agora."""
+        s = self.sensors
+        if s is None or not s.running:
+            return set()
+        if s.available:
+            return set(s.available)
+        # logo depois de ligar, antes da primeira volta de leitura, vale o
+        # que cada biblioteca sabe ler
+        out = set()
+        if s.psutil_ok:
+            out |= {"cpu_load", "ram_load"}
+        if s.lhm_ok:
+            out |= SENSORES_LHM | {"cpu_load", "ram_load"}
+        return out
+
+    def _erro_sensores(self, faltam) -> str:
+        s = self.sensors
+        oque = " e ".join(ROTULO_SENSOR.get(k, k) for k in sorted(faltam))
+        if s is not None and not s.lhm_ok and set(faltam) & SENSORES_LHM:
+            dll = s.lhm.dll_path
+            if not os.path.isfile(dll):
+                return (f"sem {oque}: falta a LibreHardwareMonitorLib.dll em "
+                        + os.path.dirname(dll))
+            return f"sem {oque}: a biblioteca de sensores nao abriu ({s.lhm.error})"
+        return f"esta maquina nao informa {oque}"
+
+    def _problema_da_camada(self, layer) -> str | None:
+        """Diz por que uma camada ligada esta sem o dado de que precisa.
+
+        Sem isso, aplicar o Ambilight numa maquina em que a captura de tela
+        falha dizia "ligando tela" e deixava o gabinete parado sem
+        explicacao. Nos sensores conta tambem qual leitura a camada usa: sem
+        a DLL so ha uso de CPU e RAM, e um efeito de temperatura ficava azul
+        para sempre com a fonte marcada como ativa.
+        """
+        if not layer.enabled:
+            return None
+        d = fx.get(layer.effect_id)
+        if d is None:
+            return None
+        for kind in d.needs:
+            src = {"audio": self.audio, "screen": self.screen,
+                   "sensors": self.sensors}.get(kind)
+            if src is None or not src.running:
+                erro = getattr(src, "error", None) or "nao ligou"
+                return f"{ROTULO_FONTE.get(kind, kind)} indisponivel: {erro}"
+            if kind == "sensors":
+                faltam = (sensores_da_camada(layer.effect_id, layer.params)
+                          - self._sensores_possiveis())
+                if faltam:
+                    return self._erro_sensores(faltam)
+        return None
+
+    def _avisos_das_camadas(self) -> dict:
+        if not self.renderer:
+            return {}
+        out = {}
+        for layer in list(self.renderer.layers):
+            msg = self._problema_da_camada(layer)
+            if msg:
+                out[layer.id] = msg
+        return out
+
+    def set_layers(self, layers_json, preset="keep", perfil=None):
         """Troca a pilha de camadas inteira, a partir do que veio da interface.
 
         `preset` diz qual cena pronta essa pilha representa: None marca cena
         personalizada, um id marca o preset, e "keep" deixa como estava. E o
         que permite desfazer a aplicacao de um preset sem a vitrine continuar
-        apontando para ele.
+        apontando para ele. `perfil` faz o mesmo para o desfazer de carregar
+        um perfil, e vale junto com `preset`.
         """
         with self._lock:
             self.renderer.set_layers([Layer.from_json(d) for d in layers_json])
             if preset != "keep":
                 self.config["last_preset"] = preset
+                self.config["perfil_atual"] = perfil if isinstance(perfil, str) else None
                 self.save_config()
+            else:
+                self._cena_mudou()
             self._sync_sources()
             self._sincroniza_aux()
 
     def add_layer(self, effect_id: str, **kw):
-        """Acrescenta uma camada com o efeito pedido."""
+        """Acrescenta uma camada com o efeito pedido.
+
+        `acima_de` poe a camada logo acima de outra, pelo id. E o que o
+        duplicar usa: no topo da pilha, a copia de uma camada de fundo
+        cobria todas as outras e a cena mudava inteira.
+        """
         with self._lock:
             d = fx.get(effect_id)
             layer = Layer(effect_id, kw.get("params"), kw.get("blend", "normal"),
                           kw.get("opacity", 1.0), True, kw.get("targets"),
                           kw.get("name") or (d.label if d else effect_id))
-            self.renderer.add_layer(layer)
+            indice = None
+            ref = kw.get("acima_de")
+            if ref:
+                pos = next((i for i, l in enumerate(self.renderer.layers)
+                            if l.id == ref), None)
+                if pos is not None:
+                    indice = pos + 1
+            self.renderer.add_layer(layer, indice)
+            self._cena_mudou()
             self._sync_sources()
             self._sincroniza_aux()
             return layer.to_json()
@@ -836,6 +1096,17 @@ class SpectraApp:
                 if not layer:
                     return None
                 if "effect" in patch and patch["effect"] != layer.effect_id:
+                    antigo, novo = fx.get(layer.effect_id), fx.get(patch["effect"])
+                    # O nome que so repetia o efeito acompanha a troca; sem
+                    # isso a camada que virou Fogo seguia listada como a onda
+                    # de antes. Nome dado pela pessoa fica como esta. Sem
+                    # diferenca de maiuscula: a barra de cor unica nomeia a
+                    # camada "Cor unica", e o efeito se chama "Cor Unica".
+                    if (novo is not None and "name" not in patch
+                            and (not layer.name
+                                 or (antigo is not None and str(layer.name).casefold()
+                                     == antigo.label.casefold()))):
+                        layer.name = novo.label
                     layer.effect_id = patch["effect"]
                     layer.params = {}
                     layer.state.clear()
@@ -856,6 +1127,7 @@ class SpectraApp:
                     layer._mask_key = None
             # fora da trava do renderizador: abrir captura de audio leva
             # centenas de milissegundos, e o gabinete congelaria esse tempo
+            self._cena_mudou()
             self._sync_sources()
             self._sincroniza_aux()
             return layer.to_json()
@@ -864,6 +1136,7 @@ class SpectraApp:
         """Tira uma camada pelo id."""
         with self._lock:
             self.renderer.remove_layer(layer_id)
+            self._cena_mudou()
             self._sync_sources()
             self._sincroniza_aux()
 
@@ -883,7 +1156,16 @@ class SpectraApp:
                     nova.append(by_id[i])
             nova += [l for l in self.renderer.layers if l.id not in vistos]
             self.renderer.set_layers(nova)
+            self._cena_mudou()
             self._sincroniza_aux()
+
+    def _brilho_aceso(self) -> float:
+        """O ultimo brilho diferente de zero, para acender depois de apagar."""
+        try:
+            b = float(self.config.get("brilho_aceso") or 1.0)
+        except (TypeError, ValueError):
+            b = 1.0
+        return min(1.0, b) if b > 0 else 1.0
 
     def update_settings(self, patch: dict):
         """Altera brilho, gama, taxa de quadros e afins."""
@@ -891,13 +1173,24 @@ class SpectraApp:
             for k in ("brightness", "gamma", "fps", "smoothing", "paused"):
                 if k in patch and self.renderer:
                     self.renderer.settings[k] = patch[k]
+            if "brightness" in patch:
+                try:
+                    b = float(patch["brightness"])
+                except (TypeError, ValueError):
+                    b = 0.0
+                if b > 0:
+                    self.config["brilho_aceso"] = b
             for k in ("exclusive_mode", "autostart_openrgb"):
                 if k in patch:
                     self.config[k] = bool(patch[k])
             if "enabled_devices" in patch and self.renderer:
-                self.renderer.settings["enabled_devices"] = patch["enabled_devices"]
-                self.config["enabled_devices"] = patch["enabled_devices"]
-                self.renderer.rebuild()
+                antes = self.renderer.settings.get("enabled_devices") or {}
+                novo = patch["enabled_devices"] or {}
+                self.renderer.settings["enabled_devices"] = novo
+                self.config["enabled_devices"] = novo
+                with self.renderer._lock:
+                    self.renderer.rebuild()
+                    self._apaga_desligados(antes, novo)
                 self.renderer.arm_direct()
             # com o render pausado o laco nao envia nada, entao mudar o brilho
             # nao apareceria no gabinete ate despausar; um empurrao resolve
@@ -908,25 +1201,81 @@ class SpectraApp:
                     self.renderer.push(self.renderer.frame)
                 except OpenRGBError:
                     pass
+                # o teclado so recebe cor do laco, que esta parado: sem o
+                # empurrao dele o apagar deixava o teclado aceso
+                amb = self.renderer.ambiente
+                if amb is not None:
+                    try:
+                        amb(self.renderer.frame)
+                    except Exception:
+                        pass
             self.save_config()
 
-    def set_zone_geometry(self, device_key_: str, zone_index: int, geometry: dict):
-        """Salva onde uma zona fica no mapa do gabinete."""
+    def _apaga_desligados(self, antes: dict, novo: dict):
+        """Manda preto para o dispositivo que acabou de sair do controle.
+
+        Fora do canvas ele nao recebe mais nada, e ficava congelado no ultimo
+        quadro para sempre. Roda com a trava do renderizador, depois de
+        remontar: um quadro em andamento terminaria por cima do preto.
+        """
+        for dev in self.renderer.all_devices:
+            key = device_key(dev)
+            if antes.get(key) is False or novo.get(key) is not False:
+                continue
+            n = dev.led_count
+            if not n:
+                continue
+            try:
+                self.client.update_leds(dev.index, b"\x00\x00\x00\x00" * n, n)
+            except OpenRGBError:
+                pass
+
+    def set_zone_geometry(self, device_key_: str, zone_index: int, geometry):
+        """Salva onde uma zona fica no mapa do gabinete.
+
+        Geometria nula apaga a da zona, que volta ao posicionamento
+        automatico.
+        """
         with self._lock:
             layout = self.config.setdefault("layout", {})
             dev = layout.setdefault(device_key_, {}).setdefault("zones", {})
-            dev[str(zone_index)] = geometry
+            if geometry is None:
+                dev.pop(str(zone_index), None)
+            else:
+                dev[str(zone_index)] = geometry
             self.renderer.layout_config = layout
             self.renderer.rebuild()
             self.save_config()
 
-    def reset_layout(self):
-        """Descarta o mapa salvo e volta ao posicionamento automatico."""
+    def reset_layout(self) -> dict:
+        """Descarta o mapa salvo e volta ao posicionamento automatico.
+
+        Devolve o mapa que existia, para a interface oferecer desfazer: um
+        clique ali apagava de uma vez o que o assistente montou.
+        """
         with self._lock:
+            anterior = self.config.get("layout") or {}
             self.config["layout"] = {}
             self.renderer.layout_config = {}
             self.renderer.rebuild()
             self.save_config()
+            return anterior
+
+    def set_layout(self, layout) -> dict:
+        """Troca o mapa inteiro, como no desfazer do restaurar automatico."""
+        ok = isinstance(layout, dict) and all(
+            isinstance(d, dict) and isinstance(d.get("zones", {}), dict)
+            for d in layout.values())
+        if not ok:
+            # o canvas le cada dispositivo como dicionario; outra coisa ali
+            # derrubaria a montagem dele
+            return {"ok": False, "error": "mapa ilegivel"}
+        with self._lock:
+            self.config["layout"] = layout
+            self.renderer.layout_config = layout
+            self.renderer.rebuild()
+            self.save_config()
+        return {"ok": True}
 
     def resize_zones(self, changes, persist: bool = True):
         """Aplica varias contagens de LED de uma vez e recarrega uma unica vez.
@@ -977,9 +1326,27 @@ class SpectraApp:
             self.renderer.arm_direct()
             return {"ok": True, "changed": True}
 
-    def resize_zone(self, device_key_: str, zone_index: int, size: int,
+    def resize_zone(self, device_key_: str, zone_index: int, size,
                     persist: bool = True):
-        """Aplica a contagem de LEDs de uma zona so."""
+        """Aplica a contagem de LEDs de uma zona so.
+
+        E a porta da contagem digitada, e por isso confere antes de escrever:
+        campo vazio chegava como nulo e voltava erro de Python, e "900" num
+        conector de ate 512 passava sem conferencia e ficava gravado. O teto
+        de 512 e o mesmo do campo da interface.
+        """
+        try:
+            size = int(size)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Digite quantos LEDs esse conector tem"}
+        with self._lock:
+            _dev, zone = self._find_zone(device_key_, zone_index)
+        if zone is not None:
+            # zero passa quando o conector aceita: e o "nada plugado aqui"
+            teto = min(zone.leds_max, 512)
+            if not zone.leds_min <= size <= teto:
+                return {"ok": False, "error": (
+                    f"{zone.name}: digite de {max(zone.leds_min, 1)} a {teto}")}
         return self.resize_zones([(device_key_, zone_index, size)], persist)
 
     def _probe_open_session(self, probe_max: int):
@@ -1125,8 +1492,12 @@ class SpectraApp:
             self.renderer.settings["paused"] = sess["was_paused"]
             return {"ok": True, "applied": applied}
 
-    def set_source_config(self, kind: str, cfg: dict):
-        """Reconfigura uma fonte externa, como o dispositivo de audio."""
+    def set_source_config(self, kind: str, cfg: dict) -> dict:
+        """Reconfigura uma fonte externa, como o dispositivo de audio.
+
+        Devolve se a captura abriu. Antes a interface dizia "atualizada" em
+        todo caso, e o dispositivo que falhava so aparecia trocando de aba.
+        """
         with self._lock:
             self.config.setdefault("sources", {})[kind] = cfg
             self.save_config()
@@ -1141,19 +1512,35 @@ class SpectraApp:
                 self.screen = None
             self._sync_sources()
             self._sincroniza_aux()
+            src = {"audio": self.audio, "screen": self.screen}.get(kind)
+            if src is None:
+                # nenhuma camada usa a fonte agora: a escolha vale quando usar
+                return {"ok": True, "running": False, "em_uso": False}
+            if not src.running:
+                erro = getattr(src, "error", None) or "motivo desconhecido"
+                return {"ok": False, "running": False, "em_uso": True,
+                        "error": f"a captura nao abriu: {erro}"}
+            return {"ok": True, "running": True, "em_uso": True}
 
     def apply_preset(self, preset_id: str):
-        """Carrega uma cena pronta pelo id."""
+        """Carrega uma cena pronta pelo id.
+
+        Devolve em `falhou` o que a cena pede e nao esta chegando, para a
+        interface avisar na hora em vez de dizer que ligou a fonte.
+        """
         p = ps.by_id(preset_id)
         if p is None:
             return {"ok": False, "error": "preset desconhecido"}
         with self._lock:
             self.renderer.load_scene(p.scene())
             self.config["last_preset"] = preset_id
+            self.config["perfil_atual"] = None
             self._sync_sources()
             self._sincroniza_aux()
             self.save_config()
-        return {"ok": True, "name": p.name, "needs": list(p.needs)}
+            falhou = sorted(set(self._avisos_das_camadas().values()))
+        return {"ok": True, "name": p.name, "needs": list(p.needs),
+                "falhou": falhou}
 
     def setup_todo(self) -> list:
         """Lista o que ainda falta configurar, para a interface avisar."""
@@ -1197,14 +1584,19 @@ class SpectraApp:
                 self._probe_open_session(probe_max)
             else:
                 self.renderer.blank()
+            antes = self._probe_session["sizes"]
             zones = []
             for z in self.resizable_zones():
+                chave = f"{z['device']}:{z['zone']}"
+                # `antes` e a contagem de antes da sondagem, que o conferir
+                # usa para abrir direto na conferencia sem contar de novo
                 zones.append({"device": z["device"], "zone": z["zone"],
                               "zone_name": z["zone_name"],
                               "device_name": z["device_name"],
-                              "max": z["count"]})
+                              "max": z["count"],
+                              "antes": antes.get(chave, z["count"])})
             if not zones:
-                return {"ok": False, "error": "nenhum header ajustavel"}
+                return {"ok": False, "error": "nenhum conector ajustavel"}
             return {"ok": True, "zones": zones}
 
     def probe_multi_paint(self, items):
@@ -1390,9 +1782,15 @@ class SpectraApp:
                 out.append(fn[:-5])
         return out
 
-    def save_profile(self, name: str):
-        """Salva a cena atual como perfil."""
-        safe = "".join(c for c in name if c.isalnum() or c in " _-").strip()
+    def save_profile(self, name: str, sobrescrever: bool = False):
+        """Salva a cena atual como perfil.
+
+        Perfil que ja existe so e trocado com `sobrescrever`; sem isso volta
+        `existe`, e a interface pergunta antes. A conferencia e pelo nome ja
+        limpo, que e o que vai para o disco: "Jogo!" vira "Jogo" e passava
+        por cima do perfil Jogo com o aviso dizendo que era um perfil novo.
+        """
+        safe = "".join(c for c in str(name) if c.isalnum() or c in " _-").strip()
         if not safe:
             return {"ok": False, "error": "nome invalido"}
         path = os.path.join(PROFILES_DIR, safe + ".json")
@@ -1400,9 +1798,12 @@ class SpectraApp:
         # duplo, escreviam no mesmo temporario ao mesmo tempo e o perfil
         # podia sair com os dois conteudos embaralhados
         with self._lock:
+            if os.path.isfile(path) and not sobrescrever:
+                return {"ok": False, "existe": True, "name": safe}
             os.makedirs(PROFILES_DIR, exist_ok=True)
             _grava_json(path, self.renderer.scene_json())
             self.config["last_profile"] = safe
+            self.config["perfil_atual"] = safe
             self.save_config()
         return {"ok": True, "name": safe}
 
@@ -1423,7 +1824,16 @@ class SpectraApp:
         return path
 
     def load_profile(self, name: str, apply_only=False):
-        """Carrega um perfil salvo."""
+        """Carrega um perfil salvo.
+
+        Carregado pela pessoa, o perfil traz o brilho, a gama e a taxa de
+        quadros que guardou. Na abertura, `apply_only`, vem so a cena: os
+        ajustes globais ja sairam da configuracao, e o brilho baixado depois
+        de salvar o perfil nao pode subir sozinho a cada reinicio.
+
+        O preset que tocava antes deixa de ser o atual, senao a vitrine
+        seguia marcando como tocando uma cena que ja nao estava no ar.
+        """
         path = self._caminho_perfil(name)
         if path is None or not os.path.isfile(path):
             return False
@@ -1432,9 +1842,15 @@ class SpectraApp:
                 data = json.load(f)
             # perfil com formato estranho vira recusa, e nao excecao: na
             # abertura isso derrubaria a conexao inteira com o render parado
-            self.renderer.load_scene(data)
+            if apply_only:
+                self.renderer.set_layers(
+                    [Layer.from_json(d) for d in data.get("layers", [])])
+            else:
+                self.renderer.load_scene(data)
         except Exception:
             return False
+        self.config["last_preset"] = None
+        self.config["perfil_atual"] = name
         if not apply_only:
             self.config["last_profile"] = name
             self.save_config()
@@ -1443,21 +1859,80 @@ class SpectraApp:
         return True
 
     def delete_profile(self, name: str):
-        """Apaga um perfil salvo."""
+        """Apaga um perfil salvo.
+
+        Apagado o perfil que valia, ele deixa de ser o atual e o da abertura:
+        o nome apontaria para um arquivo que nao existe mais.
+        """
         path = self._caminho_perfil(name)
         if path is not None and os.path.isfile(path):
             os.remove(path)
+            mudou = False
+            for k in ("last_profile", "perfil_atual"):
+                if self.config.get(k) == name:
+                    self.config[k] = None
+                    mudou = True
+            if mudou:
+                self.save_config()
             return True
         return False
 
+    def set_favoritos(self, ids) -> dict:
+        """Grava os presets marcados com estrela.
+
+        Moram na configuracao, e nao no navegador: a janela do app roda em
+        modo privado, que apaga o armazenamento do navegador ao fechar, e as
+        estrelas sumiam a cada reinicio.
+        """
+        if not isinstance(ids, list):
+            return {"ok": False, "error": "lista de favoritos invalida"}
+        validos = [i for i in dict.fromkeys(x for x in ids if isinstance(x, str))
+                   if ps.by_id(i) is not None]
+        self.config["favoritos"] = validos
+        self.save_config()
+        return {"ok": True, "favoritos": validos}
+
+    def set_inventario(self, itens) -> dict:
+        """Grava o que a pessoa descreveu do gabinete no assistente."""
+        if not isinstance(itens, list):
+            return {"ok": False, "error": "inventario invalido"}
+        self.config["inventario"] = [i for i in itens if isinstance(i, dict)][:64]
+        self.save_config()
+        return {"ok": True}
+
+    def mostrar_janela(self) -> dict:
+        """Mostra a janela do app, a pedido de uma segunda abertura."""
+        cb = self.ao_mostrar_janela
+        if cb is None:
+            return {"ok": False}
+        try:
+            cb()
+        except Exception:
+            return {"ok": False}
+        return {"ok": True}
+
     def catalog(self):
-        """Reune efeitos, presets, paletas e blends para a interface."""
+        """Reune efeitos, presets, paletas e blends para a interface.
+
+        Cada preset leva as leituras de sensor que usa, para a vitrine marcar
+        os de temperatura quando a maquina nao tem como medi-la.
+        """
+        presets = ps.catalog()
+        for g in presets:
+            for pj in g["presets"]:
+                p = ps.by_id(pj["id"])
+                usados = set()
+                for layer in (p.layers if p else []):
+                    usados |= sensores_da_camada(layer.get("effect"),
+                                                 layer.get("params"))
+                pj["sensores"] = sorted(usados)
         return {
             "effects": fx.catalog(),
             "blends": [{"value": v, "label": l} for v, l in blend.LABELS],
-            "palettes": [{"name": n, "colors": palette_preview(n)}
+            "palettes": [{"name": n, "label": PALETTE_LABELS.get(n, n),
+                          "colors": palette_preview(n)}
                          for n in PALETTE_NAMES],
-            "presets": ps.catalog(),
+            "presets": presets,
             "spots": [{"value": v, "label": l} for v, l in CASE_SPOT_LABELS],
         }
 
@@ -1473,9 +1948,16 @@ class SpectraApp:
             "config_dir": CONFIG_DIR,
             "profiles": self.list_profiles(),
             "last_profile": self.config.get("last_profile"),
+            "perfil_atual": self.config.get("perfil_atual"),
             "elevacao": self.elevacao,
             "teclado": (self.teclado.to_json() if self.teclado else None),
             "akko_keyboard": self.config.get("akko_keyboard", True),
+            "motivo_conexao": self.motivo_conexao,
+            "erro_conexao": self.erro_conexao,
+            "autostart_openrgb": self.config.get("autostart_openrgb", True),
+            "favoritos": list(self.config.get("favoritos") or []),
+            "inventario": self.config.get("inventario"),
+            "assistente_ativo": getattr(self, "_probe_session", None) is not None,
         }
         if not r:
             out["devices"] = []
@@ -1502,10 +1984,10 @@ class SpectraApp:
             "sources": {
                 "audio": self._src_status(self.audio, "audio"),
                 "screen": self._src_status(self.screen, "screen"),
-                "sensors": (self.sensors.status() if self.sensors
-                            else {"running": False}),
+                "sensors": self._sensores_status(),
             },
             "needed": sorted(self._needed_sources()),
+            "avisos": self._avisos_das_camadas(),
             "setup_todo": self.setup_todo(),
             "zones_resizable": self.resizable_zones(),
             "last_preset": self.config.get("last_preset"),
@@ -1516,6 +1998,21 @@ class SpectraApp:
             },
         })
         return out
+
+    def _sensores_status(self) -> dict:
+        """Situacao dos sensores, com a pasta onde a DLL deve ficar.
+
+        Vem mesmo antes da fonte ligar, para a vitrine ja saber se ha como
+        medir temperatura e o aviso mostrar o caminho inteiro.
+        """
+        if self.sensors:
+            d = self.sensors.status()
+        else:
+            dll = _dll_sensores()
+            d = {"running": False, "dll_path": dll,
+                 "dll_present": os.path.isfile(dll)}
+        d["dll_dir"] = os.path.dirname(d.get("dll_path") or _dll_sensores())
+        return d
 
     def _src_status(self, src, kind) -> dict:
         cfg = (self.config.get("sources") or {}).get(kind) or {}
