@@ -16,17 +16,22 @@ const W = {
 
 const zoneKey = (z) => `${z.device}:${z.zone}`;
 
+// Uma linha generica. A sugestao antiga era um gabinete especifico, com dois
+// grupos de fans e uma fita de cabo de 24 pinos que quase ninguem tem, e
+// quem nao apagava essa linha a via aparecer na atribuicao e no mapa.
 function defaultInventory() {
   return [
-    { id: "fans1", label: "Fans (grupo 1)", kind: "fan", pieces: 3, spot: "topo_centro" },
-    { id: "fans2", label: "Fans (grupo 2)", kind: "fan", pieces: 3, spot: "base_centro" },
-    { id: "cabo24", label: "Fita do cabo 24 pinos", kind: "cable", pieces: 1, lanes: 12, spot: "placa_mae" },
+    { id: "fans", label: "Fans", kind: "fan", pieces: 3, spot: "frente_meio" },
   ];
 }
 
-async function startWizard(list) {
+/** Abre o assistente. Com `conferir`, os conectores que ja tem contagem
+ *  comecam nela e o assistente abre direto na conferencia: antes o botao
+ *  de conferir zerava tudo e refazia a busca inteira do zero. */
+async function startWizard(list, opcoes) {
   if (W.busy) return;
   W.busy = true;
+  const conferir = !!(opcoes && opcoes.conferir);
   try {
     const r = await API.post("/api/probe/multi/start", { max: PROBE_MAX });
     if (!r.ok) return toast(r.error || "nao consegui iniciar", true);
@@ -36,16 +41,28 @@ async function startWizard(list) {
       const want = new Set(list.map((z) => `${z.device}:${z.zone}`));
       zs = zs.filter((z) => want.has(`${z.device}:${z.zone}`));
     }
-    W.zones = zs.map((z, i) => ({
-      device: z.device, zone: z.zone, name: z.zone_name,
-      color: HEADER_COLORS[i % HEADER_COLORS.length],
-      lo: 1, hi: PROBE_MAX, count: null, empty: false,
-    }));
+    W.zones = zs.map((z, i) => {
+      // a busca vai ate o que o conector aceita, e nao sempre ate 256: num
+      // conector de 120 a primeira rodada acendia do LED 129 em diante, nada
+      // acendia e a pessoa achava que tinha quebrado
+      const max = Math.max(1, z.max || PROBE_MAX);
+      const zona = {
+        device: z.device, zone: z.zone, name: z.zone_name, max,
+        color: HEADER_COLORS[i % HEADER_COLORS.length],
+        lo: 1, hi: max, count: null, empty: false,
+        antes: z.antes, plano: planoSalvo(z.device, z.zone),
+      };
+      if (conferir && z.antes > 0) {
+        zona.count = Math.min(z.antes, max);
+        zona.lo = zona.hi = zona.count;
+      }
+      return zona;
+    });
     W.inventory = loadInventory();
     W.assign = {};
     W.perPiece = {};
     W.round = 0;
-    W.step = 0;
+    W.aplicado = null;
     // o que sobrou de um assistente cancelado no meio nao pode vazar para
     // este: cor ja marcada como vista desviaria a contagem sem a pessoa
     // ter respondido, e o indice velho abriria no conector errado
@@ -53,8 +70,10 @@ async function startWizard(list) {
     W._verifyIdx = 0;
     W._assignIdx = 0;
     W._splitIdx = 0;
+    W.step = conferir ? (pending().length ? 1 : 2) : 0;
     $("#probeModal").hidden = false;
     renderStep();
+    if (W.step === 1) paintRound();
   } catch (e) {
     toast(e.message, true);
   } finally {
@@ -66,21 +85,41 @@ function openProbe(device, zone, name) {
   return startWizard([{ device, zone }]);
 }
 
+/** Diz se o mapa salvo da zona e um plano de pecas feito pelo assistente. */
+function planoSalvo(device, zone) {
+  const zi = (S.zones || []).find((x) => x.device_key === device && x.zone_index === zone);
+  return !!(zi && zi.geometry && zi.geometry.shape === "multi");
+}
+
+/** Conector sem peca marcada so perde o mapa quando ele e um plano do
+ *  assistente feito para outra contagem. Plano que ainda bate, ou forma
+ *  desenhada na aba Layout, fica: conferir a contagem e pular a atribuicao
+ *  apagava o mapa de todos os conectores, sem desfazer. */
+function planoVencido(z) {
+  return z.plano && z.count !== z.antes;
+}
+
+/** Recomeca a contagem de todos os conectores do assistente. */
+function recontar() {
+  W.zones.forEach((z) => { z.lo = 1; z.hi = z.max || PROBE_MAX; z.count = null; z.empty = false; });
+  W.step = 1;
+  W.round = 0;
+  renderStep();
+  paintRound();
+}
+
+// O inventario mora na configuracao do app: no armazenamento do navegador
+// ele sumia a cada reinicio, e o assistente voltava com a sugestao padrao.
 function loadInventory() {
-  try {
-    const raw = localStorage.getItem("spectra.inventory");
-    if (raw) {
-      const v = JSON.parse(raw);
-      if (Array.isArray(v) && v.length) return v;
-    }
-  } catch (e) {}
+  const v = S.state && S.state.inventario;
+  if (Array.isArray(v) && v.length) return v.map((it) => ({ ...it }));
   return defaultInventory();
 }
 
 function saveInventory() {
-  try {
-    localStorage.setItem("spectra.inventory", JSON.stringify(W.inventory));
-  } catch (e) {}
+  const itens = W.inventory.map((it) => ({ ...it }));
+  if (S.state) S.state.inventario = itens;
+  API.post("/api/inventario", { itens }).catch(() => {});
 }
 
 async function closeWizard(apply) {
@@ -247,12 +286,23 @@ function stepCount(box) {
     return renderStep();
   }
   W.round++;
+  // quantas perguntas ainda faltam, pela maior faixa em aberto: cada uma
+  // corta a faixa pela metade
+  const faltam = Math.max(1, ...left.map((z) => Math.ceil(Math.log2(Math.max(2, z.hi - z.lo + 1)))));
+  const total = W.round - 1 + faltam;
+  const quantos = left.length > 1
+    ? ` Uma resposta avanca os ${left.length} conectores de uma vez.` : "";
   box.insertAdjacentHTML("beforeend", `
     <p class="probe-lead">Cada conector acendeu <b>a partir de um ponto ate o
     fim</b>, numa cor propria. Marque as cores que voce <b>consegue ver agora</b>
     no gabinete — pode ser um trecho pequeno, basta ver <b>qualquer</b> LED
-    daquela cor. Uma resposta avanca os tres conectores de uma vez.</p>`);
+    daquela cor.${quantos}</p>
+    <p class="hint" style="margin:-8px 0 12px">Pergunta ${W.round} de cerca de ${total}.</p>`);
 
+  let responder = null;
+  const rotuloResposta = () => {
+    if (responder) responder.textContent = W.seen.size ? "Responder" : "Nao vejo nenhuma dessas cores";
+  };
   const grid = document.createElement("div");
   grid.className = "seen-grid";
   for (const z of left) {
@@ -266,6 +316,7 @@ function stepCount(box) {
       const k = zoneKey(z);
       if (W.seen.has(k)) W.seen.delete(k); else W.seen.add(k);
       b.classList.toggle("on", W.seen.has(k));
+      rotuloResposta();
     });
     grid.appendChild(b);
   }
@@ -275,7 +326,7 @@ function stepCount(box) {
      uma cor aparecer em <b>qualquer</b> fan ou fita, marque. Errar um "nao vi"
      faz a contagem terminar baixa demais — mas o proximo passo confere isso.</p>`);
 
-  nav(box, "Voltar", () => { W.step = 0; renderStep(); },
+  const barra = nav(box, "Voltar", () => { W.step = 0; renderStep(); },
       "Responder", async () => {
         const vistos = new Set(W.seen);
         W.seen = new Set();
@@ -288,6 +339,10 @@ function stepCount(box) {
         renderStep();
         await paintRound();
       });
+  // sem cor marcada, a resposta certa e dizer que nao ve nenhuma; o botao
+  // "Responder" sozinho nao deixava isso claro
+  responder = barra.querySelector(".primary");
+  rotuloResposta();
 }
 
 async function lightVerify(z, n) {
@@ -305,14 +360,12 @@ function stepVerify(box) {
     box.insertAdjacentHTML("beforeend",
       `<p class="probe-lead">Nenhum conector respondeu na contagem. Verifique se
        os cabos ARGB estao ligados e refaca.</p>`);
-    return nav(box, "Refazer contagem", () => {
-      W.zones.forEach((z) => { z.lo = 1; z.hi = PROBE_MAX; z.count = null; z.empty = false; });
-      W.step = 1; renderStep(); paintRound();
-    }, "Sair", () => closeWizard(false));
+    return nav(box, "Refazer contagem", recontar, "Sair", () => closeWizard(false));
   }
 
   const idx = Math.min(W._verifyIdx || 0, zs.length - 1);
   const z = zs[idx];
+  const maximo = z.max || PROBE_MAX;
   lightVerify(z);
 
   box.insertAdjacentHTML("beforeend", `
@@ -329,7 +382,7 @@ function stepVerify(box) {
   const sl = document.createElement("input");
   sl.type = "range";
   sl.min = 1;
-  sl.max = PROBE_MAX;
+  sl.max = maximo;
   sl.value = z.count;
   box.appendChild(sl);
 
@@ -340,12 +393,12 @@ function stepVerify(box) {
     <button class="btn sm" data-d="-1">− 1</button>
     <button class="btn sm" data-d="1">+ 1</button>
     <button class="btn sm" data-d="5">+ 5</button>
-    <button class="btn sm ghost" id="vfMax">Acender o maximo (${PROBE_MAX})</button>`;
+    <button class="btn sm ghost" id="vfMax">Acender o maximo (${maximo})</button>`;
   box.appendChild(ctrl);
 
   let timer = null;
   const setN = (n) => {
-    z.count = clamp(Math.round(n), 1, PROBE_MAX);
+    z.count = clamp(Math.round(n), 1, maximo);
     $("#vfCount").textContent = z.count;
     sl.value = z.count;
     clearTimeout(timer);
@@ -355,8 +408,8 @@ function stepVerify(box) {
   ctrl.querySelectorAll("[data-d]").forEach((b) =>
     b.addEventListener("click", () => setN(z.count + parseInt(b.dataset.d, 10))));
   $("#vfMax", ctrl).addEventListener("click", () => {
-    lightVerify(z, PROBE_MAX);
-    toast(`Acendi ${PROBE_MAX}. Se acendeu mais coisa, suba o numero ate igualar.`);
+    lightVerify(z, maximo);
+    toast(`Acendi ${maximo}. Se acendeu mais coisa, suba o numero ate igualar.`);
   });
 
   box.insertAdjacentHTML("beforeend",
@@ -367,10 +420,7 @@ function stepVerify(box) {
   nav(box, idx > 0 ? "Conector anterior" : "Refazer contagem",
       () => {
         if (idx > 0) { W._verifyIdx = idx - 1; renderStep(); }
-        else {
-          W.zones.forEach((x) => { x.lo = 1; x.hi = PROBE_MAX; x.count = null; x.empty = false; });
-          W.step = 1; renderStep(); paintRound();
-        }
+        else recontar();
       },
       idx < zs.length - 1 ? "Proximo conector" : "Tudo aceso, continuar",
       () => {
@@ -389,10 +439,7 @@ async function stepAssign(box) {
     box.insertAdjacentHTML("beforeend",
       `<p class="probe-lead">Nenhum conector respondeu. Verifique se os cabos
        ARGB estao ligados e tente de novo.</p>`);
-    return nav(box, "Refazer contagem", () => {
-      W.zones.forEach((z) => { z.lo = 1; z.hi = PROBE_MAX; z.count = null; z.empty = false; });
-      W.step = 1; renderStep(); paintRound();
-    }, "Sair", () => closeWizard(false));
+    return nav(box, "Refazer contagem", recontar, "Sair", () => closeWizard(false));
   }
 
   const idx = W._assignIdx || 0;
@@ -567,7 +614,9 @@ function stepApply(box) {
     const items = piecesOf(z);
     const desc = items.length
       ? items.map((it) => `${it.pieces}x ${esc(it.label)} (${W.perPiece[zoneKey(z) + "|" + it.id]} LEDs cada)`).join("<br>")
-      : "sem pecas atribuidas — vira uma linha unica";
+      : planoVencido(z)
+        ? "sem pecas atribuidas — o plano antigo nao bate com a contagem e volta ao posicionamento automatico"
+        : "sem pecas atribuidas — o mapa atual fica como esta";
     t.insertAdjacentHTML("beforeend",
       `<div class="sum-row"><b style="color:${z.color}">${esc(z.name)}</b>
        <span><b>${z.count} LEDs</b><br>${desc}</span></div>`);
@@ -578,34 +627,59 @@ function stepApply(box) {
       "Aplicar tudo", () => applyAll());
 }
 
+/** Grava tudo, em tres fases. Cada fase concluida fica anotada: se uma
+ *  falhar, o botao volta como "Tentar de novo" e pula o que ja foi feito.
+ *  Antes o botao ficava travado em "Aplicando", e repetir nao funcionaria,
+ *  porque depois de fechar a sondagem as contagens ja nao tem para onde ir. */
 async function applyAll() {
   const btn = $("#probeBody .probe-actions .primary");
   if (btn) { btn.disabled = true; btn.textContent = "Aplicando…"; }
+  const feito = W.aplicado || (W.aplicado = { commits: false, finish: false, mapas: new Set() });
   try {
-    for (const z of W.zones) {
-      await API.post("/api/probe/commit", {
-        device: z.device, zone: z.zone, count: z.count || 0 });
+    if (!feito.commits) {
+      for (const z of W.zones) {
+        await API.post("/api/probe/commit", {
+          device: z.device, zone: z.zone, count: z.count || 0 });
+      }
+      feito.commits = true;
     }
-    await API.post("/api/probe/finish", {});
+    if (!feito.finish) {
+      await API.post("/api/probe/finish", {});
+      feito.finish = true;
+    }
 
     for (const z of activeZones()) {
+      if (feito.mapas.has(zoneKey(z))) continue;
       const items = piecesOf(z);
-      if (!items.length) continue;
-      const parts = [];
-      for (const it of items) {
-        const c = W.perPiece[zoneKey(z) + "|" + it.id] || 0;
-        for (let i = 0; i < it.pieces; i++)
-          parts.push({ kind: it.kind, count: c, spot: it.spot,
-                       lanes: it.lanes || 12 });
+      if (!items.length) {
+        // Sem peca marcada, o plano de uma rodada anterior com contagens que
+        // ja nao batem da lugar ao posicionamento automatico.
+        if (planoVencido(z))
+          await API.post("/api/zone/geometry", {
+            device: z.device, zone: z.zone, geometry: null });
+      } else {
+        const parts = [];
+        for (const it of items) {
+          const c = W.perPiece[zoneKey(z) + "|" + it.id] || 0;
+          for (let i = 0; i < it.pieces; i++)
+            parts.push({ kind: it.kind, count: c, spot: it.spot,
+                         lanes: it.lanes || 12 });
+        }
+        await API.post("/api/zone/plan", {
+          device: z.device, zone: z.zone, parts });
       }
-      await API.post("/api/zone/plan", {
-        device: z.device, zone: z.zone, parts });
+      feito.mapas.add(zoneKey(z));
     }
+    W.aplicado = null;
     $("#probeModal").hidden = true;
     toast(`Configurado: ${W.zones.filter((z) => z.count)
       .map((z) => `${z.name} = ${z.count}`).join(", ")}`);
   } catch (e) {
-    toast(e.message, true);
+    const falta = !feito.commits ? "Nada foi gravado ainda."
+      : !feito.finish ? "As contagens foram enviadas, mas nao foram gravadas."
+      : "As contagens foram gravadas, mas o mapa de algum conector nao foi montado.";
+    toast(`${e.message}. ${falta}`, true);
+    if (btn) { btn.disabled = false; btn.textContent = "Tentar de novo"; }
   }
   await refreshState();
   renderSetupBanner();

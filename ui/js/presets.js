@@ -5,20 +5,41 @@ const NEED_LABEL = { audio: "audio", screen: "tela", sensors: "sensores" };
 let showAllPresets = false;
 let presetCat = "todos";
 
+// Favoritos e inventario moram na configuracao do app. No navegador eles
+// sumiam a cada reinicio: a janela roda em modo privado, que apaga o
+// armazenamento ao fechar. As chaves antigas so servem para migrar.
 const FAV_KEY = "spectra.favoritos";
+const INV_KEY = "spectra.inventory";
 
-function loadFavs() {
-  try {
-    const v = JSON.parse(localStorage.getItem(FAV_KEY) || "[]");
-    return new Set(Array.isArray(v) ? v : []);
-  } catch (e) { return new Set(); }
-}
+let FAVS = new Set();
 
 function saveFavs(set) {
-  try { localStorage.setItem(FAV_KEY, JSON.stringify([...set])); } catch (e) {}
+  API.post("/api/favoritos", { ids: [...set] })
+    .then((r) => { if (S.state) S.state.favoritos = r.favoritos || [...set]; })
+    .catch((e) => toast(e.message, true));
 }
 
-let FAVS = loadFavs();
+/** Leva para a configuracao o que ficou no armazenamento do navegador, de
+ *  quem usava o modo --browser ou uma versao anterior. */
+async function migraArmazenamentoAntigo() {
+  const st = S.state || {};
+  let favs = null, inv = null;
+  try { favs = JSON.parse(localStorage.getItem(FAV_KEY) || "null"); } catch (e) {}
+  try { inv = JSON.parse(localStorage.getItem(INV_KEY) || "null"); } catch (e) {}
+  let ok = true;
+  if (Array.isArray(favs) && favs.length && !(st.favoritos || []).length) {
+    try {
+      const r = await API.post("/api/favoritos", { ids: favs });
+      FAVS = new Set(r.favoritos || []);
+    } catch (e) { ok = false; }
+  }
+  if (Array.isArray(inv) && inv.length && !Array.isArray(st.inventario)) {
+    try { await API.post("/api/inventario", { itens: inv }); } catch (e) { ok = false; }
+  }
+  if (ok) {
+    try { localStorage.removeItem(FAV_KEY); localStorage.removeItem(INV_KEY); } catch (e) {}
+  }
+}
 
 function presetById(id) {
   for (const g of ((S.catalog && S.catalog.presets) || []))
@@ -47,22 +68,41 @@ function buildQuickBar() {
     b.className = "sw";
     b.style.background = c;
     b.title = c;
-    b.addEventListener("click", () => applySolid(c));
+    b.addEventListener("click", () => applySolid(c, snapshotScene()));
     box.appendChild(b);
   }
-  $("#quickColor").addEventListener("input", (e) => applySolidSoon(e.target.value));
+  // O retrato da cena sai no primeiro passo do arrasto e vale ate o seletor
+  // fechar. Tirado a cada passo, o Desfazer voltava para a cor anterior do
+  // proprio arrasto, e nao para o efeito que estava antes.
+  let antesDoArrasto = null;
+  $("#quickColor").addEventListener("input", (e) => {
+    if (!antesDoArrasto) antesDoArrasto = snapshotScene();
+    applySolidSoon(e.target.value);
+  });
+  $("#quickColor").addEventListener("change", (e) => {
+    const antes = antesDoArrasto;
+    antesDoArrasto = null;
+    applySolid(e.target.value, antes || snapshotScene());
+  });
   $("#btnShuffle").addEventListener("click", () => {
-    const pool = allPresets().filter((p) => showAllPresets || p.refined !== false);
+    const pool = allPresets().filter(
+      (p) => (showAllPresets || p.refined !== false) && presetDisponivel(p));
     if (!pool.length) return;
     applyPreset(pool[Math.floor(Math.random() * pool.length)].id);
   });
 }
 
+function avisoPausado() {
+  return S.state && S.state.settings && S.state.settings.paused
+    ? " (efeitos pausados: Retomar no topo)" : "";
+}
+
 /** Troca a cena inteira por uma cor chapada. E o caso de uso mais comum de
- *  todos, e antes exigia montar uma camada na aba Avancado. */
-async function applySolid(hex) {
+ *  todos, e antes exigia montar uma camada na aba Avancado. Sem `antes`,
+ *  e um passo do arrasto do seletor: aplica calado, sem aviso. */
+async function applySolid(hex, antes) {
   $("#quickColor").value = hex;
-  const antes = snapshotScene();
+  const calado = antes === undefined;
   try {
     await API.post("/api/layers", {
       preset: null,
@@ -74,7 +114,7 @@ async function applySolid(hex) {
     renderParams();
     renderNowPlaying();
     markActivePreset();
-    toast(`Cor ${hex} aplicada`, false, undoAction(antes));
+    if (!calado) toast(`Cor ${hex} aplicada${avisoPausado()}`, false, undoAction(antes));
   } catch (e) {
     toast(e.message, true);
   }
@@ -88,11 +128,17 @@ function applySolidSoon(hex) {
   _solidSoon(hex);
 }
 
-function snapshotScene() {
+/** Retrato da cena para o desfazer. `comAjustes` inclui brilho e afins,
+ *  que carregar um perfil tambem troca. */
+function snapshotScene(comAjustes) {
   const st = S.state || {};
+  const s = st.settings || {};
   return {
     layers: (st.layers || []).map((l) => ({ ...l })),
     preset: st.last_preset || null,
+    perfil: st.perfil_atual || null,
+    ajustes: comAjustes ? { brightness: s.brightness, gamma: s.gamma,
+                            fps: s.fps, smoothing: s.smoothing } : null,
   };
 }
 
@@ -102,7 +148,9 @@ function undoAction(antes) {
     label: "Desfazer",
     run: async () => {
       try {
-        await API.post("/api/layers", { layers: antes.layers, preset: antes.preset });
+        await API.post("/api/layers", { layers: antes.layers, preset: antes.preset,
+                                        perfil: antes.perfil });
+        if (antes.ajustes) await API.post("/api/settings", antes.ajustes);
         S.selected = null;
         await refreshState();
         renderParams();
@@ -116,32 +164,49 @@ function undoAction(antes) {
 
 /* ---------------------------------------------------------- vitrine */
 
+/** Leituras de sensor que a maquina entrega, ou null enquanto nao se sabe. */
+function sensoresPossiveis() {
+  const s = (S.state && S.state.sources && S.state.sources.sensors) || {};
+  if (s.running && s.available && s.available.length) return new Set(s.available);
+  if (s.lhm === false || s.dll_present === false) return new Set(["cpu_load", "ram_load"]);
+  return null;
+}
+
+/** O que o preset pede de sensor e a maquina nao mede. */
+function sensoresFaltando(p) {
+  const pos = sensoresPossiveis();
+  return pos ? (p.sensores || []).filter((k) => !pos.has(k)) : [];
+}
+
+function presetDisponivel(p) {
+  if (!p.needs.length) return true;
+  const s = (S.state && S.state.sources) || {};
+  return p.needs.every((n) => !(s[n] && s[n].error && !s[n].running)) &&
+         !sensoresFaltando(p).length;
+}
+
 function renderPresets(filter) {
   const box = $("#presetGrid");
   if (!box || !S.catalog) return;
-  const q = (filter !== undefined ? filter : ($("#presetSearch").value || ""))
-    .trim().toLowerCase();
-  renderPresetChips();
+  const q = semAcento(filter !== undefined ? filter : ($("#presetSearch").value || "")).trim();
+  // com texto na busca vale a vitrine inteira: presa ao chip marcado, a busca
+  // por "fogo" com Cabo selecionado dizia que nada existia
+  const cat = q ? "todos" : presetCat;
+  renderPresetChips(cat);
   box.innerHTML = "";
 
-  const disponivel = (p) => {
-    if (!p.needs.length) return true;
-    const s = (S.state && S.state.sources) || {};
-    return p.needs.every((n) => !(s[n] && s[n].error && !s[n].running));
-  };
-
   let mostrados = 0;
-  const grupos = presetCat === "favoritos"
+  const grupos = cat === "favoritos"
     ? [{ category: "Favoritos", presets: allPresets().filter((p) => FAVS.has(p.id)) }]
     : (S.catalog.presets || []).filter(
-        (g) => presetCat === "todos" || g.category === presetCat);
+        (g) => cat === "todos" || g.category === cat);
 
   for (const g of grupos) {
     const items = g.presets.filter(
       (p) => (showAllPresets || p.refined !== false || FAVS.has(p.id)) &&
-             (!q || p.name.toLowerCase().includes(q) ||
-              p.description.toLowerCase().includes(q) ||
-              g.category.toLowerCase().includes(q)));
+             (!q || semAcento(p.name).includes(q) ||
+              semAcento(p.description).includes(q) ||
+              semAcento(g.category).includes(q)));
     if (!items.length) continue;
 
     const t = document.createElement("div");
@@ -153,20 +218,20 @@ function renderPresets(filter) {
     grid.className = "preset-grid";
     for (const p of items) {
       mostrados++;
-      grid.appendChild(presetCard(p, disponivel(p)));
+      grid.appendChild(presetCard(p, presetDisponivel(p)));
     }
     box.appendChild(grid);
   }
 
   if (!mostrados) {
-    box.innerHTML = presetCat === "favoritos"
+    box.innerHTML = cat === "favoritos"
       ? `<p class="muted center" style="padding:30px">Nenhum favorito ainda. Passe o mouse
          num efeito e clique na estrela.</p>`
       : `<p class="muted center" style="padding:30px">Nada encontrado.</p>`;
   }
 
   const escondidos = allPresets().filter((p) => p.refined === false && !FAVS.has(p.id)).length;
-  if (escondidos && presetCat !== "favoritos") {
+  if (escondidos && cat !== "favoritos") {
     const bar = document.createElement("div");
     bar.className = "preset-more";
     bar.innerHTML = showAllPresets
@@ -189,7 +254,13 @@ function presetCard(p, disponivel) {
   b.className = "preset";
   b.dataset.preset = p.id;
   const cols = p.swatch.concat(p.swatch[0]).join(",");
-  const badge = p.needs.length
+  // efeito de temperatura numa maquina sem como medi-la fica azul parado:
+  // o selo avisa antes do clique
+  const falta = sensoresFaltando(p);
+  const semTemp = falta.some((k) => k === "cpu_temp" || k === "gpu_temp");
+  const badge = falta.length
+    ? `<span class="badge falta">${semTemp ? "sem temperatura" : "sem sensor"}</span>`
+    : p.needs.length
     ? `<span class="badge">usa ${p.needs.map((n) => NEED_LABEL[n] || n).join(" + ")}</span>`
     : (p.refined === false ? `<span class="badge forte">intenso</span>` : "");
   b.innerHTML =
@@ -199,7 +270,8 @@ function presetCard(p, disponivel) {
     `<div class="body"><div class="t">${esc(p.name)}</div>` +
     `<div class="d">${esc(p.description)}</div></div>` +
     `<button class="fav${FAVS.has(p.id) ? " on" : ""}" title="Favoritar">${ICON_STAR}</button>`;
-  if (!disponivel) b.title = "A fonte que este efeito usa esta indisponivel agora";
+  if (falta.length) b.title = "Esta maquina nao mede o que este efeito usa: veja a aba Fontes";
+  else if (!disponivel) b.title = "A fonte que este efeito usa esta indisponivel agora";
   b.addEventListener("click", (e) => {
     if (e.target.closest(".fav")) return;
     applyPreset(p.id);
@@ -214,7 +286,7 @@ function presetCard(p, disponivel) {
   return b;
 }
 
-function renderPresetChips() {
+function renderPresetChips(marcado) {
   const box = $("#presetChips");
   if (!box || !S.catalog) return;
   const cats = (S.catalog.presets || []).map((g) => g.category);
@@ -227,14 +299,17 @@ function renderPresetChips() {
   }
   if (!cats.includes(presetCat) && presetCat !== "todos" && presetCat !== "favoritos")
     presetCat = "todos";
+  const on = marcado || presetCat;
 
   box.innerHTML = "";
   for (const [id, label, n] of opts) {
     const b = document.createElement("button");
-    b.className = "chip" + (presetCat === id ? " on" : "");
+    b.className = "chip" + (on === id ? " on" : "");
     b.innerHTML = `${esc(label)}<span class="n">${n}</span>`;
     b.addEventListener("click", () => {
       presetCat = id;
+      // escolher categoria e deixar a busca de lado
+      $("#presetSearch").value = "";
       renderPresets();
     });
     box.appendChild(b);
@@ -262,10 +337,15 @@ async function applyPreset(id) {
     markActivePreset();
     renderNowPlaying();
     const p = presetById(id);
-    let msg = p ? `${p.name} aplicado` : "aplicado";
+    const nome = p ? p.name : "Preset";
+    // a fonte que nao abriu vira erro na hora; antes o aviso dizia "ligando
+    // tela" e o gabinete ficava parado sem explicacao
+    if (r.falhou && r.falhou.length)
+      return toast(`${nome} aplicado, mas ${r.falhou[0]}`, true, undoAction(antes));
+    let msg = `${nome} aplicado`;
     if (r.needs && r.needs.length)
-      msg += ` — ligando ${r.needs.map((n) => NEED_LABEL[n] || n).join(" + ")}`;
-    toast(msg, false, undoAction(antes));
+      msg += ` — usando ${r.needs.map((n) => NEED_LABEL[n] || n).join(" + ")}`;
+    toast(msg + avisoPausado(), false, undoAction(antes));
   } catch (e) {
     toast(e.message, true);
   }
@@ -284,15 +364,15 @@ function renderNowPlaying() {
   const foco = document.activeElement;
   if (foco && box.contains(foco) && typing(foco)) return;
   const st = S.state || {};
-  const p = presetById(st.last_preset);
   const layers = st.layers || [];
   if (!layers.length) {
     box.innerHTML = `<p class="muted center" style="padding:12px 0">Nada tocando.</p>`;
     return;
   }
+  const cena = descreveCena(st, layers);
   box.innerHTML =
-    `<div class="np-name">${esc(p ? p.name : "Cena personalizada")}</div>` +
-    `<div class="np-desc">${esc(p ? p.description : "Montada na aba Avancado.")}</div>`;
+    `<div class="np-name">${esc(cena.nome)}</div>` +
+    `<div class="np-desc">${esc(cena.desc)}</div>`;
 
   const acts = document.createElement("div");
   acts.className = "np-actions";
@@ -320,6 +400,14 @@ function renderNowPlaying() {
     head.innerHTML = `<b>${esc(L.name || d.label)}</b><span>${esc(d.label)}</span>` +
       (L.enabled ? "" : `<span class="np-off">desligada</span>`);
     wrap.appendChild(head);
+    const aviso = avisoDaCamada(L);
+    if (aviso) {
+      const w = document.createElement("p");
+      w.className = "src-err";
+      w.style.margin = "0 0 6px";
+      w.textContent = `${aviso[0].toUpperCase()}${aviso.slice(1)}.`;
+      wrap.appendChild(w);
+    }
 
     const quick = d.params.filter((q) => ["speed", "palette", "color", "intensity"]
       .includes(q.name)).slice(0, 3);
@@ -346,6 +434,72 @@ function renderNowPlaying() {
     p.textContent = `Mais ${layers.length - visiveis.length} camada(s) na aba Avancado.`;
     box.appendChild(p);
   }
+}
+
+/** Nome e descricao do que esta no ar. Perfil carregado e cor unica diziam
+ *  "Cena personalizada, montada na aba Avancado", coisa que a pessoa nao fez,
+ *  e o preset de antes seguia no painel depois de carregar um perfil. */
+function descreveCena(st, layers) {
+  if (st.perfil_atual)
+    return { nome: `Perfil ${st.perfil_atual}`, desc: "Carregado da aba Perfis." };
+  const p = presetById(st.last_preset);
+  if (p) return { nome: p.name, desc: p.description };
+  const L = layers[0];
+  if (layers.length === 1 && L.effect === "static" && L.name === "Cor unica")
+    return { nome: "Cor unica", desc: `Todos os LEDs em ${(L.params || {}).color || "uma cor so"}.` };
+  return { nome: "Cena personalizada", desc: "Montada na aba Avancado." };
+}
+
+/* ------------------------------------------------ aviso de concorrentes */
+
+// O que o fechamento automatico derrubou na abertura. Sem isto a pessoa
+// descobria sozinha que o NZXT CAM ou o iCUE tinham sumido: o status dizia
+// "fechei" por um instante e logo virava "conectado".
+let avisoExclusivoVisto = null;
+function renderAvisoExclusivo() {
+  const box = $("#avisoExclusivo");
+  if (!box) return;
+  const ex = (S.state && S.state.exclusive) || null;
+  const nomes = (lista) => [...new Set((lista || []).map((c) => c.rotulo))];
+  const fechados = nomes(ex && ex.fechados), falhou = nomes(ex && ex.falhou);
+  const chave = JSON.stringify([fechados, falhou]);
+  if (!ex || !ex.ao_iniciar || (!fechados.length && !falhou.length) ||
+      avisoExclusivoVisto === chave) {
+    box.innerHTML = "";
+    delete box.dataset.k;
+    return;
+  }
+  if (box.dataset.k === chave) return;
+  box.dataset.k = chave;
+  const partes = [];
+  if (fechados.length)
+    partes.push(`Fechei ${esc(listaNomes(fechados))} ao iniciar, para nao disputarem
+      os LEDs com o Spectra.`);
+  if (falhou.length)
+    partes.push(`Nao consegui fechar ${esc(listaNomes(falhou))}: roda como servico ou
+      com mais privilegio. Se o gabinete piscar, feche pelo proprio programa.`);
+  box.innerHTML = `
+    <div class="setup info">
+      <div class="head-row">
+        <h3>Programas de RGB fechados</h3>
+        <button class="btn sm" data-a="nunca">Nao fechar mais</button>
+        <button class="btn sm ghost" data-a="ok">Ok</button>
+      </div>
+      <p>${partes.join(" ")} Eles podem cuidar tambem da curva dos fans: a chave
+      fica na aba Ajustes.</p>
+    </div>`;
+  box.querySelector('[data-a="ok"]').addEventListener("click", () => {
+    avisoExclusivoVisto = chave;
+    renderAvisoExclusivo();
+  });
+  box.querySelector('[data-a="nunca"]').addEventListener("click", async () => {
+    avisoExclusivoVisto = chave;
+    renderAvisoExclusivo();
+    try {
+      await API.post("/api/settings", { exclusive_mode: false });
+      toast("O Spectra nao fecha mais outros programas ao iniciar");
+    } catch (e) { toast(e.message, true); }
+  });
 }
 
 /* ----------------------------------------------------- aviso de instalacao */
@@ -376,24 +530,7 @@ function renderSetupBanner(force) {
   }
 
   if (!st.connected) {
-    box.innerHTML = `
-      <div class="setup err">
-        <div class="head-row">
-          <h3>Sem conexao com o OpenRGB</h3>
-          <button class="btn sm" id="bannerReconnect">Tentar de novo</button>
-        </div>
-        <p>${esc(st.status || "o servidor do OpenRGB nao respondeu")}.
-        O Spectra usa o OpenRGB so como camada de hardware: sem ele no ar,
-        nenhum LED e alcancado. Baixe em <code>openrgb.org</code> e deixe
-        instalado em <code>C:\\Program Files</code> que o Spectra sobe sozinho.</p>
-      </div>`;
-    const b = $("#bannerReconnect");
-    if (b) b.addEventListener("click", async () => {
-      b.classList.add("busy");
-      try { await API.post("/api/reconnect"); } catch (e) { toast(e.message, true); }
-      b.classList.remove("busy");
-      refreshState();
-    });
+    renderSemConexao(box, st);
     return;
   }
 
@@ -408,19 +545,9 @@ function renderSetupBanner(force) {
         </div>`;
       return;
     }
-    box.innerHTML = resizable.length ? `
-      <div class="setup ok">
-        <div class="head-row">
-          <h3>${leds} LEDs sob controle</h3>
-          <button class="btn sm" id="startWizard">Conferir quantidade de LEDs</button>
-        </div>
-        <p>${resizable.map((z) => `${esc(z.zone_name)}: <b>${z.count}</b>`).join(" · ")}
-        — se algum LED do gabinete fica aceso numa cor que voce nao escolheu, o
-        numero desse conector esta <b>menor</b> que o real: os LEDs alem da conta
-        nunca recebem dado e ficam com a ultima cor do controlador.</p>
-      </div>` : "";
-    const w = $("#startWizard");
-    if (w) w.addEventListener("click", () => startWizard(resizable));
+    // Tudo configurado nao e aviso: a faixa verde de todo dia empurrava a
+    // vitrine para baixo. Conferir a contagem mora na aba Hardware.
+    box.innerHTML = "";
     return;
   }
 
@@ -434,8 +561,15 @@ function renderSetupBanner(force) {
       </div>
       <input type="number" min="1" max="${z.max}" placeholder="LEDs">
       <button class="btn sm apply">Aplicar</button>
-      <button class="btn sm primary find">Descobrir</button>
+      <button class="btn sm find">Descobrir</button>
     </div>`).join("");
+
+  // O aviso da RAM so quando ela esta mesmo de fora, e apontando para o
+  // Corrigir da aba Hardware: o script que ele mandava rodar nao vem no
+  // app instalado.
+  const e = st.elevacao || {};
+  const ramDeFora = e.servidor_elevado === false ||
+    (e.servidor_elevado === true && !e.dram && !e.pawnio);
 
   box.innerHTML = `
     <div class="setup">
@@ -449,19 +583,29 @@ function renderSetupBanner(force) {
       para voce — ele acende trechos e pergunta o que voce ve, achando o
       numero exato em poucos cliques.</p>
       <div class="rows">${rows}</div>
-      <p class="note">Faltando RAM, water cooler ou GPU na lista? Esses vao por
-      SMBus/USB e so aparecem com o servidor do OpenRGB <b>elevado</b>. Rode uma
-      vez num PowerShell como administrador:<br>
-      <code>powershell -ExecutionPolicy Bypass -File tools\\setup-admin.ps1</code></p>
+      ${ramDeFora ? `<p class="note">Faltando RAM, water cooler ou GPU na lista?
+      Veja o aviso na aba Hardware. <button class="btn sm ghost" id="bannerHardware">Abrir
+      Hardware</button></p>` : ""}
     </div>`;
 
   const wz = $("#startWizard");
   if (wz) wz.addEventListener("click", () => startWizard(todo));
+  const hw = $("#bannerHardware");
+  if (hw) hw.addEventListener("click", () => showTab("devices"));
 
   $$("#setupBanner .row").forEach((row) => {
     const inp = row.querySelector("input");
+    const chave = `${row.dataset.dev}:${row.dataset.zone}`;
+    // o aviso so lista conector ainda sem contagem, entao a de agora e zero
+    const rascunho = rascunhoLeds(chave, 0);
+    if (rascunho !== null) inp.value = rascunho;
+    inp.addEventListener("input", () => guardaRascunhoLeds(chave, 0, inp.value));
     $$(".quick button", row).forEach((qb) =>
-      qb.addEventListener("click", () => { inp.value = qb.dataset.n; inp.focus(); }));
+      qb.addEventListener("click", () => {
+        inp.value = qb.dataset.n;
+        guardaRascunhoLeds(chave, 0, inp.value);
+        inp.focus();
+      }));
     row.querySelector(".find").addEventListener("click", () =>
       openProbe(row.dataset.dev, parseInt(row.dataset.zone, 10),
                 row.querySelector(".nm").textContent.split("·")[0].trim()));
@@ -475,6 +619,7 @@ function renderSetupBanner(force) {
           zone: parseInt(row.dataset.zone, 10),
           size: n,
         });
+        if (r.ok) RASCUNHO_LEDS.delete(chave);
         toast(r.ok ? `${n} LEDs configurados` : (r.error || "falhou"), !r.ok);
       } catch (err) {
         toast(err.message, true);
@@ -488,5 +633,64 @@ function renderSetupBanner(force) {
     inp.addEventListener("keydown", (e) => {
       if (e.key === "Enter") aplicar(row.querySelector(".apply"));
     });
+  });
+}
+
+/** O aviso de sem conexao, com a acao que resolve o motivo de verdade. O
+ *  texto antigo mandava instalar em Program Files "que o Spectra sobe
+ *  sozinho" mesmo com a partida automatica desligada, e mostrava o erro cru
+ *  do Windows. */
+function renderSemConexao(box, st) {
+  const motivo = st.motivo_conexao || "recusada";
+  // remontar a cada estado apagaria o caminho que a pessoa esta digitando
+  if (box.dataset.motivo === motivo && box.querySelector(".setup.err")) return;
+  const textos = {
+    nao_instalado: `O OpenRGB nao foi encontrado nesta maquina. Instale pelo
+      <code>openrgb.org</code> em <code>C:\\Program Files</code>, ou diga abaixo
+      onde esta o <code>OpenRGB.exe</code>, se usa a versao portatil.`,
+    partida_desligada: `O servidor do OpenRGB nao esta no ar, e a partida
+      automatica esta desligada na aba Ajustes. Abra o OpenRGB com o SDK Server
+      ligado, ou deixe o Spectra subir ele.`,
+    sem_resposta: `O OpenRGB foi aberto, mas o servidor nao respondeu na porta
+      6742 a tempo. Confira se o SDK Server esta ligado nas configuracoes do
+      OpenRGB e tente de novo.`,
+    falha_partida: `Nao consegui abrir o OpenRGB.`,
+    recusada: `O servidor do OpenRGB nao aceitou a conexao. Confira se o SDK
+      Server esta ligado nas configuracoes do OpenRGB, na porta 6742.`,
+  };
+  box.dataset.motivo = motivo;
+  box.innerHTML = `
+    <div class="setup err">
+      <div class="head-row">
+        <h3>Sem conexao com o OpenRGB</h3>
+        ${motivo === "partida_desligada"
+          ? `<button class="btn sm primary" id="bannerAutostart">Ligar partida automatica</button>` : ""}
+        <button class="btn sm" id="bannerReconnect">Tentar de novo</button>
+      </div>
+      <p>${textos[motivo] || textos.recusada} O Spectra usa o OpenRGB so como
+      camada de hardware: sem ele no ar, nenhum LED e alcancado.</p>
+      ${motivo === "nao_instalado" ? `
+      <div class="row">
+        <input type="text" id="bannerExe" placeholder="C:\\Programas\\OpenRGB\\OpenRGB.exe">
+        <button class="btn sm" id="bannerUsarExe">Usar este</button>
+      </div>` : ""}
+      ${st.erro_conexao ? `<p class="note">Detalhe: ${esc(st.erro_conexao)}</p>` : ""}
+    </div>`;
+  const tentar = $("#bannerReconnect");
+  tentar.addEventListener("click", () => reconectar(tentar));
+  const auto = $("#bannerAutostart");
+  if (auto) auto.addEventListener("click", async () => {
+    try {
+      await API.post("/api/settings", { autostart_openrgb: true });
+    } catch (e) { return toast(e.message, true); }
+    reconectar(auto);
+  });
+  const usar = $("#bannerUsarExe");
+  if (usar) usar.addEventListener("click", async () => {
+    try {
+      await API.post("/api/openrgb/exe", { path: $("#bannerExe").value });
+    } catch (e) { return toast(e.message, true); }
+    toast("Caminho do OpenRGB guardado");
+    reconectar(usar);
   });
 }

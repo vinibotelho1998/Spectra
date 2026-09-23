@@ -134,7 +134,7 @@ class DevApp(app_mod.SpectraApp):
     def ensure_openrgb(self, wait=0.0):
         return True
 
-    def enforce_exclusive(self):
+    def enforce_exclusive(self, forcar=False):
         return {"ok": True, "skipped": True, "fechados": [], "falhou": []}
 
     def connect(self, exclusive_pass=False):

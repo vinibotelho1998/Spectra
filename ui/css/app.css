@@ -95,7 +95,12 @@ input:focus-visible, select:focus-visible { box-shadow: none; border-color: var(
   background: var(--warn);
   box-shadow: 0 0 10px currentColor;
   transition: background .2s;
+  flex: 0 0 auto;
 }
+/* mensagem longa corta com reticencias em vez de quebrar a barra; o texto
+   inteiro fica no title do botao */
+#statusText { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 36ch; }
+.status .metric { white-space: nowrap; }
 .status .dot.ok { background: var(--ok); }
 .status .dot.err { background: var(--err); }
 .status .dot.busy { animation: pulse 1s ease-in-out infinite; }
@@ -212,7 +217,11 @@ input:focus-visible, select:focus-visible { box-shadow: none; border-color: var(
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 14px;
+  height: calc(100vh - 52px - 32px);
 }
+/* o mapa ocupa a altura da janela, em vez de 420px fixos com sobra embaixo */
+.layout-grid > .panel:first-child { display: flex; flex-direction: column; min-height: 0; }
+.layout-grid > .panel:last-child { display: flex; flex-direction: column; min-height: 0; }
 
 .canvas-wrap {
   position: relative;
@@ -227,7 +236,7 @@ input:focus-visible, select:focus-visible { box-shadow: none; border-color: var(
   background-blend-mode: normal;
   overflow: hidden;
 }
-.canvas-wrap.edit { min-height: 420px; cursor: crosshair; }
+.canvas-wrap.edit { flex: 1; min-height: 360px; cursor: crosshair; }
 /* absoluto para preencher a moldura mesmo quando a altura dela vem de
    min-height, caso em que height:100% nao resolveria */
 .canvas-wrap canvas { position: absolute; inset: 0; display: block;
@@ -276,6 +285,8 @@ input:focus-visible, select:focus-visible { box-shadow: none; border-color: var(
 
 .params-body { overflow-y: auto; flex: 1; min-height: 0; padding-right: 2px; }
 .params-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+/* o display flex acima vencia o hidden, e os botoes ficavam sem camada */
+.params-actions[hidden] { display: none; }
 
 .field { margin-bottom: 12px; }
 .field > label {
@@ -290,6 +301,9 @@ input:focus-visible, select:focus-visible { box-shadow: none; border-color: var(
 input[type=range] {
   -webkit-appearance: none; appearance: none;
   width: 100%; height: 4px; border-radius: 2px;
+  /* a margem de 2px do Chromium somada ao width 100% abria uma barra de
+     rolagem horizontal vazia, com cara de slider quebrado */
+  margin: 0;
   background: var(--line); outline: 0; cursor: pointer;
 }
 input[type=range]::-webkit-slider-thumb {
@@ -342,6 +356,10 @@ input[type=color] {
 
 .palette-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; max-height: 190px;
                 overflow-y: auto; padding-right: 2px; }
+.pal-select { display: flex; align-items: center; gap: 7px; }
+.pal-select .bar { flex: 0 0 46px; height: 14px; border-radius: 4px;
+                   border: 1px solid var(--line); }
+.pal-select select { flex: 1; min-width: 0; }
 .pal {
   border: 1px solid var(--line); border-radius: 6px; padding: 4px 5px;
   background: var(--bg-2); cursor: pointer; text-align: left;
@@ -419,7 +437,10 @@ input[type=color] {
   background: var(--panel-2);
   padding: 12px;
 }
-.device.disabled { opacity: .55; }
+/* so o conteudo esmaece: a chave de religar fica inteira, senao ela sumia
+   justamente quando e o unico jeito de voltar */
+.device.disabled > :not(.device-head),
+.device.disabled .device-head > :not(.switch) { opacity: .55; }
 .device-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .device-head .nm { font-size: 13px; font-weight: 600; }
 .device-head .tag {
@@ -446,6 +467,7 @@ input[type=color] {
 .src-state { display: flex; align-items: center; gap: 7px; font-size: 11.5px; margin-bottom: 10px; }
 .src-state .dot { width: 7px; height: 7px; border-radius: 50%; background: #46505f; }
 .src-state .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.src-state .dot.err { background: var(--err); box-shadow: 0 0 8px var(--err); }
 .src-err { color: var(--err); font-size: 11px; margin-top: 8px; word-break: break-word; }
 
 .meter { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 4px; }
@@ -514,12 +536,15 @@ input[type=color] {
   background: var(--panel-2); color: var(--text);
   cursor: pointer; font: inherit;
   transition: border-color .15s, transform .1s;
+  /* titulo no topo do cartao; centralizado como todo botao, cada linha da
+     grade saia em zigue-zague */
+  display: flex; flex-direction: column; justify-content: flex-start; align-items: stretch;
 }
 .fx:hover, .fx.kb { border-color: var(--accent); transform: translateY(-1px); }
 .fx .t { font-size: 12.5px; font-weight: 600; margin-bottom: 3px; }
 .fx .d { font-size: 10.5px; color: var(--muted); line-height: 1.45; }
 .fx .need {
-  display: inline-block; margin-top: 6px; font-size: 9.5px;
+  display: inline-block; align-self: flex-start; margin-top: 6px; font-size: 9.5px;
   padding: 1px 6px; border-radius: 999px;
   border: 1px solid rgba(168, 85, 247, .35); color: var(--accent-2);
 }
@@ -545,6 +570,7 @@ input[type=color] {
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #222a38; border-radius: 5px; border: 2px solid var(--panel); }
 ::-webkit-scrollbar-thumb:hover { background: #2e3a4c; }
 
@@ -567,7 +593,8 @@ input[type=color] {
 .fx-list-panel .panel-head .chiprow { width: 100%; }
 .fx-side { position: sticky; top: 0; max-height: calc(100vh - 84px);
             overflow-y: auto; display: flex; flex-direction: column; }
-.fx-side .canvas-wrap.mini { height: 210px; min-height: 210px; flex: 0 0 auto; }
+/* quadrado, como o gabinete que o motor desenha */
+.fx-side .canvas-wrap.mini { aspect-ratio: 1; height: auto; min-height: 0; flex: 0 0 auto; }
 .fx-side .now-playing { overflow-y: auto; }
 
 .panel-head input[type=search] { width: 210px; }
@@ -634,6 +661,7 @@ input[type=color] {
   color: #d8b4fe; backdrop-filter: blur(4px);
 }
 .preset .badge.forte { border-color: rgba(255, 176, 32, .45); color: #ffd591; }
+.preset .badge.falta { border-color: rgba(255, 77, 94, .5); color: #ffb3ba; }
 .preset .playing {
   position: absolute; top: 7px; left: 7px;
   font-size: 9.5px; padding: 2px 8px; border-radius: 999px;
@@ -712,19 +740,35 @@ input[type=color] {
 .setup .head-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .setup .head-row h3 { margin: 0; }
 .setup .head-row .btn { margin-left: auto; }
+.setup .head-row .btn + .btn { margin-left: 0; }
+.setup .note .btn { margin-left: 6px; }
 .setup .head-row .spin {
   width: 14px; height: 14px; border-radius: 50%;
   border: 2px solid rgba(0, 217, 255, .25); border-top-color: var(--accent);
   animation: spin .8s linear infinite;
 }
 
-@media (max-width: 1100px) {
+/* Janela estreita, dentro do minimo que o app permite: coluna lateral um
+   pouco menor, mas ainda ao lado. Em uma coluna so, o Tocando agora ia para
+   depois dos 76 efeitos e o editor da zona para baixo do mapa. */
+@media (max-width: 1180px) {
+  .scene-grid, .layout-grid, .fx-layout { grid-template-columns: minmax(0, 1fr) 300px; }
+}
+
+/* uma coluna so abaixo da largura minima da janela, no navegador */
+@media (max-width: 960px) {
   .scene-grid { grid-template-columns: 1fr; grid-template-areas: "preview" "layers" "params";
                 grid-template-rows: minmax(320px, 1fr) auto auto; height: auto; }
   .layers-panel { max-height: none; }
-  .layout-grid { grid-template-columns: 1fr; }
+  .layout-grid { grid-template-columns: 1fr; height: auto; }
   .fx-layout { grid-template-columns: 1fr; }
   .fx-side { position: static; }
+}
+
+/* sem o motor no ar nao ha cena para trocar: a vitrine e o + Camada
+   devolviam erro. Voltam sozinhos quando o estado traz o canvas. */
+.sem-motor .quickbar, .sem-motor #presetGrid, .sem-motor #btnAddLayer {
+  opacity: .45; pointer-events: none;
 }
 
 /* ------------------------------------------------------------- layout */
@@ -750,8 +794,10 @@ kbd {
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
 .settings-grid .panel .field:last-child { margin-bottom: 0; }
 .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 12px; font-size: 12px; }
-.kv span:nth-child(odd) { color: var(--muted); }
-.kv span:nth-child(even) { word-break: break-all; }
+/* so os filhos diretos: o span do erro dentro do valor caia no nth-child
+   e saia cinza em vez de vermelho */
+.kv > span:nth-child(odd) { color: var(--muted); }
+.kv > span:nth-child(even) { word-break: break-all; }
 .kv .err { color: var(--err); }
 .shortcuts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 12px; align-items: center; }
 .shortcuts span:nth-child(even) { color: var(--muted); }
@@ -760,6 +806,11 @@ kbd {
 /* --------------------------------------------------------- assistente */
 
 .probe-card { width: min(780px, 100%); }
+/* Topo parado e rodape na mesma altura em todos os passos: centralizado,
+   cada passo tinha uma altura e o botao de avancar pulava ate 77px. */
+#probeModal { align-items: flex-start; padding-top: 6vh; }
+.probe-card .modal-body { display: flex; flex-direction: column; min-height: 380px; }
+.probe-card .probe-actions { margin-top: auto; }
 .modal-head .probe-step {
   font-size: 10.5px; color: var(--muted); padding: 2px 9px;
   border: 1px solid var(--line); border-radius: 999px;

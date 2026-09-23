@@ -42,7 +42,7 @@
     <button class="iconbtn on" id="btnPower" title="Apagar ou acender os LEDs" aria-label="Apagar ou acender os LEDs">
       <svg viewBox="0 0 24 24" class="ic"><path d="M12 3v9"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/></svg>
     </button>
-    <button class="btn ghost" id="btnPause" title="Pausar render (Espaco)">Pausar</button>
+    <button class="btn ghost" id="btnPause" title="Pausar os efeitos, com os LEDs congelados (Espaco)">Pausar</button>
   </div>
 </header>
 
@@ -81,6 +81,7 @@
 
     <!-- ========================== EFEITOS =========================== -->
     <section class="tab active" id="tab-effects">
+      <div id="avisoExclusivo"></div>
       <div id="setupBanner"></div>
 
       <div class="quickbar">
@@ -107,9 +108,7 @@
           <div class="panel-head"><h2>Tocando agora</h2></div>
           <div class="canvas-wrap mini">
             <canvas id="preview2"></canvas>
-            <div class="canvas-empty" id="canvasEmpty2" hidden>
-              <p class="muted">Nenhum LED ativo ainda</p>
-            </div>
+            <div class="canvas-empty" id="canvasEmpty2" hidden></div>
           </div>
           <div id="nowPlaying" class="now-playing">
             <p class="muted center" style="padding:12px 0">Escolha um efeito.</p>
@@ -126,16 +125,13 @@
           <div class="panel-head">
             <h2>Pre-visualizacao</h2>
             <div class="head-actions">
-              <button class="chip" id="btnGlow" data-on="1">Brilho</button>
+              <button class="chip" id="btnGlow" data-on="1" title="So na pre-visualizacao, nao muda os LEDs">Halo</button>
               <button class="chip" id="btnLabels">Rotulos</button>
             </div>
           </div>
           <div class="canvas-wrap">
             <canvas id="preview"></canvas>
-            <div class="canvas-empty" id="canvasEmpty" hidden>
-              <p>Nenhum LED ativo.</p>
-              <p class="muted">Configure os headers ARGB na aba Hardware.</p>
-            </div>
+            <div class="canvas-empty" id="canvasEmpty" hidden></div>
           </div>
         </div>
 
@@ -157,7 +153,7 @@
           <div class="params-actions" id="paramsActions" hidden>
             <button class="btn ghost sm" id="btnChangeEffect">Trocar efeito</button>
             <button class="btn ghost sm" id="btnDupLayer" title="Cria uma copia desta camada">Duplicar</button>
-            <button class="btn ghost sm" id="btnResetParams" title="Volta os parametros do efeito ao padrao">Padroes</button>
+            <button class="btn ghost sm" id="btnResetParams" title="Volta os parametros do efeito ao padrao">Restaurar padrao</button>
           </div>
           <div id="paramsBody" class="params-body">
             <p class="muted center">Selecione uma camada.</p>
@@ -175,7 +171,7 @@
             <h2>Mapa fisico</h2>
             <div class="head-actions">
               <button class="chip" id="btnLiveLayout" data-on="1" title="Mostra as cores do efeito atual no mapa">Ao vivo</button>
-              <button class="btn ghost sm" id="btnResetLayout">Restaurar automatico</button>
+              <button class="btn ghost sm" id="btnResetLayout" title="Apaga o mapa salvo e volta ao posicionamento automatico">Voltar ao automatico</button>
             </div>
           </div>
           <p class="hint" style="margin:0 0 10px">
@@ -188,6 +184,7 @@
           <div class="chiprow zone-chips" id="zoneChips"></div>
           <div class="canvas-wrap edit">
             <canvas id="layoutCanvas"></canvas>
+            <div class="canvas-empty" id="layoutEmpty" hidden></div>
           </div>
         </div>
         <div class="panel">
@@ -222,9 +219,9 @@
     <section class="tab" id="tab-profiles">
       <div class="panel">
         <div class="panel-head"><h2>Perfis</h2></div>
-        <p class="hint" style="margin:0 0 12px">Um perfil guarda a cena inteira: camadas,
-          parametros e brilho. O ultimo perfil salvo ou carregado volta sozinho
-          quando o Spectra abre.</p>
+        <p class="hint" style="margin:0 0 12px">A cena no ar volta sozinha quando o
+          Spectra abre. Um perfil guarda uma cena inteira, com camadas, parametros
+          e brilho, para alternar entre elas.</p>
         <div class="profile-save">
           <input type="text" id="profileName" placeholder="Nome do perfil" maxlength="40">
           <button class="btn primary" id="btnSaveProfile">Salvar cena atual</button>

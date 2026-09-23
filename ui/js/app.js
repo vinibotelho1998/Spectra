@@ -75,6 +75,35 @@ function esc(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+/** Texto para comparar em busca: sem acento e em minusculas. Os rotulos
+ *  estao sem acento, e quem digitava "fumaça" recebia "Nada encontrado". */
+function semAcento(s) {
+  return String(s || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+/** "A", "A e B", "A, B e C". */
+function listaNomes(nomes) {
+  if (nomes.length <= 1) return nomes.join("");
+  return nomes.slice(0, -1).join(", ") + " e " + nomes[nomes.length - 1];
+}
+
+/** Contagens de LED digitadas e ainda nao aplicadas, por conector. A lista
+ *  e remontada quando o estado muda, e sem isso o numero digitado num
+ *  conector sumia assim que a pessoa ia digitar no seguinte. Cada rascunho
+ *  guarda a contagem que valia ao ser digitado: se ela mudou por outro
+ *  caminho, como o assistente, o rascunho perde a validade, senao o campo
+ *  mostraria o numero velho e um Aplicar desfaria a contagem nova. */
+const RASCUNHO_LEDS = new Map();
+
+function rascunhoLeds(chave, atual) {
+  const r = RASCUNHO_LEDS.get(chave);
+  return r && r.base === atual ? r.valor : null;
+}
+
+function guardaRascunhoLeds(chave, atual, valor) {
+  RASCUNHO_LEDS.set(chave, { valor, base: atual });
+}
+
 /* ------------------------------------------------------------- navegacao */
 
 function showTab(name) {
@@ -84,10 +113,12 @@ function showTab(name) {
   $$(".tab").forEach((x) => x.classList.remove("active"));
   btn.classList.add("active");
   $("#tab-" + name).classList.add("active");
-  if (name === "effects") { renderPresets(); renderSetupBanner(); renderNowPlaying(); }
+  if (name === "effects") {
+    renderPresets(); renderAvisoExclusivo(); renderSetupBanner(); renderNowPlaying();
+  }
   if (name === "layout") { renderZoneChips(); drawLayout(); }
   if (name === "sources") renderSources();
-  if (name === "devices") renderDevices();
+  if (name === "devices") renderDevices(true);
   if (name === "profiles") renderProfiles();
   if (name === "settings") renderSettings();
 }
@@ -123,8 +154,18 @@ function fitCanvas(cv) {
 }
 
 const PAD = 26;
+/** Escala unica nos dois eixos, centrada. O motor trata o gabinete como um
+ *  quadrado, com anel de raio unico; esticar cada eixo para a medida do
+ *  canvas fazia fan virar elipse e cada aba mostrar um gabinete de formato
+ *  diferente. */
+function escala(w, h) {
+  const s = Math.max(1, Math.min(w, h) - PAD * 2);
+  return { s, ox: (w - s) / 2, oy: (h - s) / 2 };
+}
+
 function project(x, y, w, h) {
-  return [PAD + x * (w - PAD * 2), PAD + y * (h - PAD * 2)];
+  const { s, ox, oy } = escala(w, h);
+  return [ox + x * s, oy + y * s];
 }
 
 /** Cor do LED i no quadro atual, direto da string hex que veio do stream. */
@@ -195,16 +236,37 @@ function drawPreview(cv, ctx) {
   if (S.labels) {
     ctx.font = "10px 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
+    const rotulos = [];
     for (const z of S.zones) {
       const p = zoneCentroid(z, w, h);
-      if (!p) continue;
+      if (p) rotulos.push({ txt: z.zone_name, x: p[0], y: p[1] - 12 });
+    }
+    for (const r of afastaRotulos(ctx, rotulos)) {
       ctx.fillStyle = "rgba(0,0,0,.65)";
-      const tw = ctx.measureText(z.zone_name).width + 8;
-      ctx.fillRect(p[0] - tw / 2, p[1] - 22, tw, 14);
+      ctx.fillRect(r.x - r.w / 2, r.y - 10, r.w, 14);
       ctx.fillStyle = "#cbd5e5";
-      ctx.fillText(z.zone_name, p[0], p[1] - 12);
+      ctx.fillText(r.txt, r.x, r.y);
     }
   }
+}
+
+/** Desce o rotulo que cairia em cima de outro ja posto. Zonas vizinhas no
+ *  mapa, como um pente de RAM e um conector da placa-mae, escreviam o nome
+ *  uma por cima da outra e nenhum dos dois dava para ler. */
+function afastaRotulos(ctx, itens) {
+  const postos = [];
+  for (const it of itens) {
+    const w = ctx.measureText(it.txt).width + 8;
+    let y = it.y;
+    for (let tentativa = 0; tentativa < 12; tentativa++) {
+      const bate = postos.some((o) => Math.abs(o.x - it.x) < (o.w + w) / 2 &&
+                                     Math.abs(o.y - y) < 15);
+      if (!bate) break;
+      y += 15;
+    }
+    postos.push({ ...it, y, w });
+  }
+  return postos;
 }
 
 function zoneCentroid(z, w, h) {
@@ -298,11 +360,15 @@ async function refreshState() {
   S.state = st;
   S.positions = (st.canvas && st.canvas.positions) || [];
   S.zones = (st.canvas && st.canvas.zones) || [];
-  setStatus(st.connected ? "ok" : st.connecting ? "busy" : "err", st.status);
+  const pausado = !!(st.settings && st.settings.paused);
+  setStatus(st.connected ? "ok" : st.connecting ? "busy" : "err",
+            (st.status || "") + (pausado && st.connected ? " · efeitos pausados" : ""));
   $("#ledVal").textContent = st.canvas ? st.canvas.led_count : "—";
-  const hasLeds = !!(st.canvas && st.canvas.led_count);
-  $("#canvasEmpty").hidden = hasLeds;
-  $("#canvasEmpty2").hidden = hasLeds;
+  // sem o motor no ar, a vitrine e o + Camada so devolviam erro de Python
+  document.body.classList.toggle("sem-motor", !st.canvas);
+  renderCanvasVazio($("#canvasEmpty"), st, false);
+  renderCanvasVazio($("#canvasEmpty2"), st, true);
+  renderCanvasVazio($("#layoutEmpty"), st, false);
 
   if (st.settings) {
     const b = Math.round((st.settings.brightness ?? 1) * 100);
@@ -322,22 +388,79 @@ async function refreshState() {
   renderLayers();
   const tab = activeTab();
   if (tab === "effects") {
+    renderAvisoExclusivo();
     renderSetupBanner();
     renderNowPlaying();
     markActivePreset();
   }
   if (tab === "devices") renderDevices();
-  if (tab === "sources") updateSensorMeters();
+  if (tab === "sources") {
+    updateSensorMeters();
+    // a captura que caiu ou o dispositivo que nao abriu aparecem sem
+    // precisar trocar de aba; com um campo em uso, espera ele sair
+    if (fontesSig(st) !== ultimoFontesSig && !digitandoEm($("#sourcesBody"))) renderSources();
+  }
   if (tab === "layout") renderZoneChips();
   if (tab === "settings" && settingsNeedsRedraw(before, st)) renderSettings();
 
   // conectou depois da janela abrir: a vitrine e o mapa mudam de vez
   if (before && !before.connected && st.connected) {
     renderPresets();
-    if (tab === "devices") renderDevices();
+    if (tab === "devices") renderDevices(true);
     if (tab === "sources") renderSources();
   }
   if (st.last_error) console.warn("render:", st.last_error);
+}
+
+function digitandoEm(box) {
+  const foco = document.activeElement;
+  return !!(box && foco && box.contains(foco) && typing(foco));
+}
+
+/** O aviso por cima do mapa quando nao ha LED para desenhar, com o motivo
+ *  certo: antes dizia para configurar os conectores mesmo quando o problema
+ *  era o OpenRGB fora do ar. */
+function renderCanvasVazio(el, st, compacto) {
+  if (!el) return;
+  const temLeds = !!(st.canvas && st.canvas.led_count);
+  el.hidden = temLeds;
+  if (temLeds) return;
+  const k = st.connecting && !st.connected ? "conectando"
+    : !st.connected || !st.canvas ? "sem_conexao"
+    : (st.zones_resizable || []).length ? "sem_leds" : "sem_controle";
+  if (el.dataset.k === k) return;
+  el.dataset.k = k;
+  const textos = {
+    conectando: ["Conectando ao OpenRGB…", "Subindo o servidor e detectando o hardware."],
+    sem_conexao: ["Sem conexao com o OpenRGB", "Sem ele no ar nenhum LED e alcancado."],
+    sem_leds: ["Nenhum LED no mapa", "Diga quantos LEDs cada conector tem."],
+    sem_controle: ["Nenhum LED ativo", "Confira a aba Hardware: os dispositivos podem estar fora do controle."],
+  }[k];
+  el.innerHTML = `<p>${esc(textos[0])}</p>` +
+    (compacto ? "" : `<p class="muted">${esc(textos[1])}</p>`);
+  if (compacto) return;
+  const b = document.createElement("button");
+  b.className = "btn sm";
+  if (k === "sem_conexao") {
+    b.textContent = "Tentar de novo";
+    b.addEventListener("click", () => reconectar(b));
+  } else if (k === "sem_leds") {
+    b.className = "btn sm primary";
+    b.textContent = "Abrir assistente";
+    b.addEventListener("click", () => startWizard());
+  } else if (k === "sem_controle") {
+    b.textContent = "Abrir Hardware";
+    b.addEventListener("click", () => showTab("devices"));
+  } else return;
+  el.appendChild(b);
+}
+
+async function reconectar(btn) {
+  if (btn) btn.classList.add("busy");
+  setStatus("busy", "reconectando…");
+  try { await API.post("/api/reconnect"); } catch (e) { toast(e.message, true); }
+  if (btn) btn.classList.remove("busy");
+  refreshState();
 }
 
 function settingsNeedsRedraw(a, b) {
@@ -353,8 +476,16 @@ function setStatus(kind, text) {
   d.classList.toggle("ok", kind === "ok");
   d.classList.toggle("err", kind === "err");
   d.classList.toggle("busy", kind === "busy");
-  $("#statusText").textContent = text ||
+  const t = text ||
     (kind === "ok" ? "conectado" : kind === "busy" ? "conectando…" : "desconectado");
+  $("#statusText").textContent = t;
+  // a barra corta o texto longo; o inteiro fica ao passar o mouse
+  $("#status").title = `${t}. Clique para abrir a aba Hardware.`;
+}
+
+function blendLabel(v) {
+  const b = ((S.catalog && S.catalog.blends) || []).find((x) => x.value === v);
+  return b ? b.label : v;
 }
 
 const ICON_EYE = `<svg viewBox="0 0 24 24" class="ic"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>`;
@@ -397,7 +528,7 @@ function renderLayers(force) {
       `<span class="grip" title="Arraste para reordenar">${ICON_GRIP}</span>` +
       `<div class="layer-body">` +
       `<div class="layer-name">${esc(L.name || (d ? d.label : L.effect))}</div>` +
-      `<div class="layer-sub">${esc(d ? d.label : L.effect)} · ${esc(L.blend)} · ${Math.round(L.opacity * 100)}% · ${scope}</div>` +
+      `<div class="layer-sub">${esc(d ? d.label : L.effect)} · ${esc(blendLabel(L.blend))} · ${Math.round(L.opacity * 100)}% · ${scope}</div>` +
       `</div>` +
       `<button class="dup" title="Duplicar">${ICON_COPY}</button>` +
       `<button class="eye" title="${L.enabled ? "Desligar" : "Ligar"}">${L.enabled ? ICON_EYE : ICON_EYE_OFF}</button>` +
@@ -420,19 +551,22 @@ function renderLayers(force) {
     });
     li.querySelector(".del").addEventListener("click", async (e) => {
       e.stopPropagation();
-      const copy = { ...L };
+      // A pilha inteira, e nao so a camada: recriada sozinha ela voltava no
+      // topo, ligada e com id novo, e como a mistura e de baixo para cima a
+      // cena restaurada saia diferente da original.
+      const antes = snapshotScene();
       await API.post("/api/layer/remove", { id: L.id });
       if (S.selected === L.id) { S.selected = null; renderParams(); }
       await refreshState();
-      toast(`Camada "${copy.name || copy.effect}" removida`, false, {
+      toast(`Camada "${L.name || L.effect}" removida`, false, {
         label: "Desfazer",
         run: async () => {
-          const nova = await API.post("/api/layer/add", {
-            effect: copy.effect, params: copy.params, blend: copy.blend,
-            opacity: copy.opacity, targets: copy.targets, name: copy.name });
-          S.selected = nova.id;
-          await refreshState();
-          renderParams();
+          try {
+            await API.post("/api/layers", { layers: antes.layers });
+            S.selected = L.id;
+            await refreshState();
+            renderParams();
+          } catch (err) { toast(err.message, true); }
         },
       });
     });
@@ -450,9 +584,11 @@ function renderLayers(force) {
 }
 
 async function duplicateLayer(L) {
+  // logo acima da original: no topo, a copia de uma camada de fundo cobria
+  // todas as outras e a cena mudava inteira
   const nova = await API.post("/api/layer/add", {
     effect: L.effect, params: L.params, blend: L.blend, opacity: L.opacity,
-    targets: L.targets, name: (L.name || L.effect) + " (copia)" });
+    targets: L.targets, name: (L.name || L.effect) + " (copia)", acima_de: L.id });
   S.selected = nova.id;
   await refreshState();
   renderParams();
@@ -531,13 +667,18 @@ function renderParams() {
     body.appendChild(p);
   }
   if (d && d.needs && d.needs.length) {
+    // o aviso do servidor diz o motivo, inclusive a falta de temperatura com
+    // a fonte de sensores no ar, que antes passava calada
+    const aviso = avisoDaCamada(L);
     const miss = d.needs.filter((n) => !sourceRunning(n));
-    if (miss.length) {
+    if (aviso || miss.length) {
       const w = document.createElement("p");
       w.className = "src-err";
       w.style.margin = "0 0 12px";
-      w.textContent = `Precisa de ${miss.map(needLabel).join(" + ")}: sem essa fonte ` +
-        `no ar o efeito fica parado. Veja a aba Fontes.`;
+      w.textContent = aviso
+        ? `${aviso[0].toUpperCase()}${aviso.slice(1)}. O efeito fica parado; veja a aba Fontes.`
+        : `Precisa de ${miss.map(needLabel).join(" + ")}: sem essa fonte ` +
+          `no ar o efeito fica parado. Veja a aba Fontes.`;
       body.appendChild(w);
     }
   }
@@ -609,7 +750,9 @@ function paramControl(q, L, set, compact) {
       (v) => set(q.type === "int" ? Math.round(v) : v), fmt);
   }
   if (q.type === "color") return field(q.label, inputColor(val, set));
-  if (q.type === "colors") return field(q.label, colorList(val, set));
+  // copia: sem cores proprias a camada usa a lista do catalogo, e editar
+  // ali mudava o padrao do efeito para todas as camadas e para o Restaurar
+  if (q.type === "colors") return field(q.label, colorList([...(val || [])], set));
   if (q.type === "bool") return switchEl(q.label, val, set);
   if (q.type === "select") return field(q.label, selectEl(q.options, val, set));
   if (q.type === "palette")
@@ -730,7 +873,7 @@ function paletteGrid(value, onChange) {
     const b = document.createElement("button");
     b.className = "pal" + (p.name === value ? " sel" : "");
     b.innerHTML = `<div class="bar" style="background:linear-gradient(90deg,${p.colors.join(",")})"></div>` +
-      `<span class="nm">${esc(p.name.replace(/_/g, " "))}</span>`;
+      `<span class="nm">${esc(p.label || p.name)}</span>`;
     b.addEventListener("click", () => {
       onChange(p.name);
       $$(".pal", g).forEach((x) => x.classList.remove("sel"));
@@ -741,10 +884,21 @@ function paletteGrid(value, onChange) {
   return g;
 }
 
+/** A paleta em lista compacta, com a faixa de cores ao lado: so o nome, sem
+ *  cor nenhuma, fazia a escolha virar tentativa e erro. */
 function paletteSelect(value, onChange) {
-  const opts = S.catalog.palettes.map((p) => ({
-    value: p.name, label: p.name.replace(/_/g, " ") }));
-  return selectEl(opts, value, onChange);
+  const wrap = document.createElement("div");
+  wrap.className = "pal-select";
+  const bar = document.createElement("span");
+  bar.className = "bar";
+  const pinta = (nome) => {
+    const p = S.catalog.palettes.find((x) => x.name === nome);
+    bar.style.background = p ? `linear-gradient(90deg,${p.colors.join(",")})` : "var(--bg-2)";
+  };
+  const opts = S.catalog.palettes.map((p) => ({ value: p.name, label: p.label || p.name }));
+  wrap.append(bar, selectEl(opts, value, (v) => { pinta(v); onChange(v); }));
+  pinta(value);
+  return wrap;
 }
 
 function chipToggle(label, on) {
@@ -765,11 +919,12 @@ $("#btnResetParams").addEventListener("click", async () => {
   if (!d) return;
   const antes = { ...L.params };
   const padroes = {};
-  for (const q of d.params) padroes[q.name] = q.default;
+  for (const q of d.params)
+    padroes[q.name] = Array.isArray(q.default) ? [...q.default] : q.default;
   await API.post("/api/layer/update", { id: L.id, patch: { params: padroes } });
   await refreshState();
   renderParams();
-  toast("Parametros no padrao", false, {
+  toast("Parametros de volta ao padrao", false, {
     label: "Desfazer",
     run: async () => {
       await API.post("/api/layer/update", { id: L.id, patch: { params: antes } });
@@ -792,13 +947,13 @@ function openEffectPicker(target) {
 function buildEffectGrid(q) {
   const box = $("#effectGrid");
   box.innerHTML = "";
-  const needle = q.trim().toLowerCase();
+  const needle = semAcento(q).trim();
   let first = null;
   for (const g of S.catalog.effects) {
     const items = g.effects.filter(
-      (e) => !needle || e.label.toLowerCase().includes(needle) ||
-             e.description.toLowerCase().includes(needle) ||
-             g.category.toLowerCase().includes(needle));
+      (e) => !needle || semAcento(e.label).includes(needle) ||
+             semAcento(e.description).includes(needle) ||
+             semAcento(g.category).includes(needle));
     if (!items.length) continue;
     const t = document.createElement("div");
     t.className = "cat-title";
@@ -829,11 +984,28 @@ async function pickEffect(id) {
     if (S.effectPickTarget === "new") {
       const L = await API.post("/api/layer/add", { effect: id });
       S.selected = L.id;
-    } else {
-      await API.post("/api/layer/update", { id: S.effectPickTarget, patch: { effect: id } });
+      await refreshState();
+      renderParams();
+      return;
     }
+    // trocar o efeito zera os parametros: o desfazer devolve os de antes
+    const alvo = S.effectPickTarget;
+    const L = ((S.state && S.state.layers) || []).find((l) => l.id === alvo);
+    const antes = L ? { effect: L.effect, params: { ...L.params }, name: L.name } : null;
+    await API.post("/api/layer/update", { id: alvo, patch: { effect: id } });
     await refreshState();
     renderParams();
+    const d = effectDef(id);
+    toast(`Efeito trocado para ${d ? d.label : id}`, false, antes && {
+      label: "Desfazer",
+      run: async () => {
+        try {
+          await API.post("/api/layer/update", { id: alvo, patch: antes });
+          await refreshState();
+          renderParams();
+        } catch (e) { toast(e.message, true); }
+      },
+    });
   } catch (e) {
     toast(e.message, true);
   }
@@ -863,15 +1035,20 @@ function drawLayout() {
   lctx.fillStyle = "#05070a";
   lctx.fillRect(0, 0, w, h);
 
+  const [gx0, gy0] = project(0, 0, w, h);
+  const [gx1, gy1] = project(1, 1, w, h);
   lctx.strokeStyle = "rgba(255,255,255,.045)";
   lctx.lineWidth = 1;
   for (let i = 1; i < 8; i++) {
-    const x = PAD + (i / 8) * (w - PAD * 2), y = PAD + (i / 8) * (h - PAD * 2);
-    lctx.beginPath(); lctx.moveTo(x, PAD); lctx.lineTo(x, h - PAD); lctx.stroke();
-    lctx.beginPath(); lctx.moveTo(PAD, y); lctx.lineTo(w - PAD, y); lctx.stroke();
+    const x = gx0 + (i / 8) * (gx1 - gx0), y = gy0 + (i / 8) * (gy1 - gy0);
+    lctx.beginPath(); lctx.moveTo(x, gy0); lctx.lineTo(x, gy1); lctx.stroke();
+    lctx.beginPath(); lctx.moveTo(gx0, y); lctx.lineTo(gx1, y); lctx.stroke();
   }
+  lctx.strokeStyle = "rgba(255,255,255,.09)";
+  lctx.strokeRect(gx0, gy0, gx1 - gx0, gy1 - gy0);
 
   const live = S.liveLayout && S.hex;
+  const rotulos = [];
   for (const z of S.zones) {
     const sel = S.selZone && S.selZone.device_key === z.device_key &&
                 S.selZone.zone_index === z.zone_index;
@@ -881,9 +1058,16 @@ function drawLayout() {
     if (pts.length > 1) {
       lctx.strokeStyle = sel ? "rgba(0,217,255,.75)" : "rgba(255,255,255,.16)";
       lctx.lineWidth = sel ? 2 : 1;
-      lctx.beginPath();
-      pts.forEach((p, i) => (i ? lctx.lineTo(p[0], p[1]) : lctx.moveTo(p[0], p[1])));
-      lctx.stroke();
+      // um traco por peca: numa zona com tres fans, a linha unica ligava o
+      // ultimo LED de um fan ao primeiro do seguinte, e os aneis nao fechavam
+      for (const seg of segmentosDaZona(z.geometry || {}, pts.length)) {
+        const parte = pts.slice(seg.ini, seg.ini + seg.n);
+        if (parte.length < 2) continue;
+        lctx.beginPath();
+        parte.forEach((p, i) => (i ? lctx.lineTo(p[0], p[1]) : lctx.moveTo(p[0], p[1])));
+        if (seg.fecha) lctx.closePath();
+        lctx.stroke();
+      }
     }
     pts.forEach((p, i) => {
       lctx.fillStyle = live ? ledColor(z.start + i) : (sel ? "#00d9ff" : "#57647a");
@@ -898,10 +1082,7 @@ function drawLayout() {
     });
 
     const c = zoneCentroid(z, w, h);
-    lctx.font = sel ? "600 11px 'Segoe UI',sans-serif" : "11px 'Segoe UI',sans-serif";
-    lctx.textAlign = "center";
-    lctx.fillStyle = sel ? "#00d9ff" : "rgba(200,210,225,.55)";
-    lctx.fillText(z.zone_name, c[0], c[1] - 12);
+    rotulos.push({ txt: z.zone_name, x: c[0], y: c[1] - 12, sel });
 
     if (sel) {
       for (const hd of handlesFor(z, w, h)) {
@@ -915,6 +1096,33 @@ function drawLayout() {
       }
     }
   }
+
+  lctx.font = "600 11px 'Segoe UI',sans-serif";
+  lctx.textAlign = "center";
+  for (const r of afastaRotulos(lctx, rotulos)) {
+    lctx.fillStyle = r.sel ? "#00d9ff" : "rgba(200,210,225,.55)";
+    lctx.fillText(r.txt, r.x, r.y);
+  }
+}
+
+/** Trechos da zona que formam uma peca so, na ordem dos LEDs. */
+function segmentosDaZona(g, n) {
+  const anelFechado = (p) => p.shape === "ring" &&
+    Math.abs((p.end_deg ?? 360) - (p.start_deg ?? 0)) >= 359;
+  if (g.shape !== "multi") return [{ ini: 0, n, fecha: anelFechado(g) }];
+  const out = [];
+  let usado = 0;
+  for (const p of (g.parts || [])) {
+    const c = Math.min(parseInt(p.count, 10) || 0, n - usado);
+    if (c <= 0) continue;
+    out.push({ ini: usado, n: c, fecha: anelFechado(p) });
+    usado += c;
+    if (usado >= n) break;
+  }
+  if (usado < n) out.push({ ini: usado, n: n - usado, fecha: false });
+  // com a ordem invertida a zona inteira vem de tras para frente
+  if (g.reverse) for (const s of out) s.ini = n - s.ini - s.n;
+  return out;
 }
 
 function renderZoneChips() {
@@ -944,7 +1152,7 @@ function renderZoneChips() {
 function handlesFor(z, w, h) {
   const g = z.geometry || {};
   const out = [];
-  if (g.shape === "line") {
+  if (g.shape === "line" || g.shape === "cable") {
     out.push({ id: "p1", ...pxy(g.x1, g.y1, w, h) });
     out.push({ id: "p2", ...pxy(g.x2, g.y2, w, h) });
   } else if (g.shape === "ring") {
@@ -953,7 +1161,7 @@ function handlesFor(z, w, h) {
   } else if (g.shape === "grid" || g.shape === "serpentine") {
     out.push({ id: "o", ...pxy(g.x, g.y, w, h) });
     out.push({ id: "s", ...pxy(g.x + g.w, g.y + g.h, w, h) });
-  } else if (g.shape === "multi" || g.shape === "cable") {
+  } else if (g.shape === "multi") {
     return out;
   } else {
     out.push({ id: "c", ...pxy(g.x, g.y, w, h) });
@@ -967,8 +1175,8 @@ function pxy(x, y, w, h) {
 }
 
 function unproject(px, py, w, h) {
-  return [clamp((px - PAD) / (w - PAD * 2), -0.2, 1.2),
-          clamp((py - PAD) / (h - PAD * 2), -0.2, 1.2)];
+  const { s, ox, oy } = escala(w, h);
+  return [clamp((px - ox) / s, -0.2, 1.2), clamp((py - oy) / s, -0.2, 1.2)];
 }
 
 lc.addEventListener("pointerdown", (e) => {
@@ -1191,10 +1399,14 @@ function renderZoneEditor() {
     return;
   }
 
+  // Sem a fita de cabo aqui, a que o assistente monta sozinha num conector
+  // aparecia como Ponto, sem campo nenhum, e mexer no select perdia as
+  // laminas e com elas os efeitos 2D.
   const shapes = [
     { value: "point", label: "Ponto" }, { value: "line", label: "Linha" },
     { value: "ring", label: "Anel (fan)" }, { value: "grid", label: "Grade" },
     { value: "serpentine", label: "Serpentina" },
+    { value: "cable", label: "Fita de cabo (laminas)" },
   ];
   box.appendChild(field("Forma", selectEl(shapes, g.shape || "line", (v) => {
     z.geometry = defaultGeom(v, g);
@@ -1211,21 +1423,37 @@ function renderZoneEditor() {
            ["start_deg", "Angulo inicial"], ["end_deg", "Angulo final"]],
     grid: [["x", "X"], ["y", "Y"], ["w", "Largura"], ["h", "Altura"],
            ["cols", "Colunas"], ["rows", "Linhas"]],
+    cable: [["x1", "X inicial"], ["y1", "Y inicial"], ["x2", "X final"], ["y2", "Y final"],
+            ["width", "Largura"], ["lanes", "Laminas"]],
   };
   numeric.serpentine = numeric.grid;
+  const faixa = {
+    cols: [1, 64, 1], rows: [1, 64, 1], lanes: [2, 48, 1],
+    width: [0.02, 0.5, 0.005], start_deg: [-360, 720, 1], end_deg: [-360, 720, 1],
+  };
 
   for (const [k, lbl] of (numeric[g.shape] || numeric.line)) {
-    const isDeg = k.endsWith("_deg");
-    const isCount = k === "cols" || k === "rows";
-    const min = isDeg ? -360 : isCount ? 1 : -0.5;
-    const max = isDeg ? 720 : isCount ? 64 : 1.5;
-    const step = isDeg ? 1 : isCount ? 1 : 0.005;
-    box.appendChild(sliderField(lbl, g[k] ?? 0, min, max, step, (v) => {
-      z.geometry[k] = v;
+    const [min, max, step] = faixa[k] || [-0.5, 1.5, 0.005];
+    const inteiro = step >= 1;
+    const padrao = k === "lanes" ? 12 : k === "width" ? 0.14 : 0;
+    box.appendChild(sliderField(lbl, g[k] ?? padrao, min, max, step, (v) => {
+      z.geometry[k] = inteiro ? Math.round(v) : v;
       applyGeomLocal(z, z.geometry);
       drawLayout();
       saveZoneSoon(z);
-    }, (v) => (isDeg || isCount ? Math.round(v) : (+v).toFixed(3))));
+    }, (v) => (inteiro ? Math.round(v) : (+v).toFixed(3))));
+  }
+
+  if (g.shape === "cable") {
+    box.appendChild(field("Ordem dos LEDs", selectEl([
+      { value: "lane", label: "Uma lamina inteira, depois a proxima" },
+      { value: "along", label: "Atravessando as laminas a cada passo" },
+    ], g.order || "lane", (v) => {
+      z.geometry.order = v;
+      applyGeomLocal(z, z.geometry);
+      saveZoneGeometry(z);
+      drawLayout();
+    })));
   }
 
   box.appendChild(switchEl("Inverter ordem dos LEDs", !!g.reverse, (v) => {
@@ -1259,17 +1487,56 @@ function defaultGeom(shape, old) {
   if (shape === "ring") return { shape, cx, cy, radius: 0.13, start_deg: -90, end_deg: 270 };
   if (shape === "grid" || shape === "serpentine")
     return { shape, x: cx - 0.2, y: cy - 0.1, w: 0.4, h: 0.2, cols: 0, rows: 0 };
+  if (shape === "cable")
+    return { shape, x1: cx - 0.25, y1: cy, x2: cx + 0.25, y2: cy, width: 0.14,
+             lanes: old.lanes || 12, order: old.order || "lane" };
   return { shape: "line", x1: cx - 0.25, y1: cy, x2: cx + 0.25, y2: cy };
 }
 
-$("#btnResetLayout").addEventListener("click", async () => {
-  await API.post("/api/layout/reset");
+async function aposMudarMapa() {
   S.selZone = null;
   await refreshState();
   renderZoneEditor();
   renderZoneChips();
   drawLayout();
-  toast("Layout restaurado");
+}
+
+// Confirmacao em dois cliques, como o Excluir de perfil, e Desfazer depois:
+// um clique ali, ao lado do Ao vivo, apagava o mapa que o assistente montou.
+let resetArmado = null;
+$("#btnResetLayout").addEventListener("click", async (e) => {
+  const b = e.currentTarget;
+  if (!resetArmado) {
+    b.textContent = "Apagar o mapa?";
+    b.classList.add("confirm");
+    resetArmado = setTimeout(() => {
+      resetArmado = null;
+      b.textContent = "Voltar ao automatico";
+      b.classList.remove("confirm");
+    }, 3500);
+    return;
+  }
+  clearTimeout(resetArmado);
+  resetArmado = null;
+  b.textContent = "Voltar ao automatico";
+  b.classList.remove("confirm");
+  let r;
+  try {
+    r = await API.post("/api/layout/reset");
+  } catch (err) { return toast(err.message, true); }
+  await aposMudarMapa();
+  const anterior = r.anterior || {};
+  toast("Mapa de volta ao posicionamento automatico", false,
+    Object.keys(anterior).length ? {
+      label: "Desfazer",
+      run: async () => {
+        try {
+          await API.post("/api/layout", { layout: anterior });
+          await aposMudarMapa();
+          toast("Mapa restaurado");
+        } catch (err) { toast(err.message, true); }
+      },
+    } : null);
 });
 
 $("#btnLiveLayout").addEventListener("click", (e) => {
@@ -1338,13 +1605,15 @@ function cartaoTeclado(st) {
   if (!t) return null;
 
   const el = document.createElement("div");
-  el.className = "device" + (t.connected ? "" : " disabled");
+  const solto = st.akko_keyboard === false;
+  el.className = "device" + (t.connected && !solto ? "" : " disabled");
   el.innerHTML = `
     <div class="device-head">
       <span class="nm">${esc(t.name)}</span>
       <span class="tag">Teclado</span>
-      ${t.connected ? `<span class="tag ok">HID direto</span>`
-                    : `<span class="tag err">sem conexao</span>`}
+      ${solto ? `<span class="tag">fora do controle</span>`
+        : t.connected ? `<span class="tag ok">HID direto</span>`
+        : `<span class="tag err">sem conexao</span>`}
       <span class="spacer"></span>
     </div>
     <p class="hint">Fora do OpenRGB, que nao tem driver para ele. Acompanha a
@@ -1361,7 +1630,8 @@ function cartaoTeclado(st) {
   return el;
 }
 
-function renderDevices() {
+let devicesSig = null;
+function renderDevices(force) {
   const box = $("#deviceList");
   const info = $("#deviceInfo");
   // nao remontar por baixo de quem esta digitando a contagem de LEDs; so o
@@ -1372,6 +1642,14 @@ function renderDevices() {
       box.contains(foco)) return;
   const st = S.state || {};
   const devs = st.devices || [];
+  // So remonta quando algo que aparece aqui mudou. O estado chega a cada
+  // 1,5 s, e cada remontagem descartava o que estava sendo digitado.
+  const sig = JSON.stringify([st.connecting, st.enabled_devices, st.elevacao,
+    st.teclado, st.akko_keyboard, st.reconnects, st.canvas && st.canvas.led_count,
+    devs.map((d) => [d.key, d.led_count, d.direct_ok, d.has_direct,
+                     d.zones.map((z) => z.leds_count)])]);
+  if (!force && sig === devicesSig) return;
+  devicesSig = sig;
   box.innerHTML = "";
   info.innerHTML = "";
 
@@ -1390,6 +1668,22 @@ function renderDevices() {
     `<span><b>${st.canvas ? st.canvas.led_count : 0}</b> sob controle do Spectra</span>` +
     (st.reconnects ? `<span><b>${st.reconnects}</b> reconexoes</span>` : "") +
     (semDirect ? `<span class="err">${semDirect} sem modo Direct</span>` : "");
+
+  // O conferir mora aqui, e nao numa faixa fixa no topo da aba Efeitos: e
+  // assunto de hardware, e a faixa empurrava a vitrine para baixo todo dia.
+  const resizable = st.zones_resizable || [];
+  if (resizable.length) {
+    const conf = document.createElement("button");
+    conf.className = "btn sm";
+    conf.textContent = "Conferir quantidade de LEDs";
+    conf.title = "Acende o que ja foi contado em cada conector, sem contar de novo";
+    conf.addEventListener("click", () => startWizard(resizable, { conferir: true }));
+    info.appendChild(conf);
+    box.insertAdjacentHTML("beforeend",
+      `<p class="hint" style="margin:0">LED aceso numa cor que voce nao escolheu? A
+       contagem daquele conector esta <b>menor</b> que o real: os LEDs alem da
+       conta nunca recebem dado e ficam com a ultima cor do controlador.</p>`);
+  }
 
   const av = avisoElevacao(st);
   if (av) box.appendChild(av);
@@ -1439,26 +1733,37 @@ function renderDevices() {
       const acts = document.createElement("div");
       acts.className = "resize";
       if (z.resizable) {
+        const chave = `${d.key}:${z.index}`;
+        const lo = Math.max(1, z.leds_min), hi = Math.min(z.leds_max, 512);
         const inp = document.createElement("input");
         inp.type = "number";
-        inp.min = z.leds_min; inp.max = Math.min(z.leds_max, 512);
-        inp.value = z.leds_count;
+        inp.min = lo; inp.max = hi;
+        const rascunho = rascunhoLeds(chave, z.leds_count);
+        inp.value = rascunho !== null ? rascunho : z.leds_count;
         inp.title = "Quantos LEDs estao plugados neste conector";
+        inp.addEventListener("input", () => guardaRascunhoLeds(chave, z.leds_count, inp.value));
         const b = document.createElement("button");
         b.className = "btn sm";
         b.textContent = "Aplicar";
         b.addEventListener("click", async () => {
+          const n = parseInt(inp.value, 10);
+          // campo vazio ia como nulo e voltava erro de Python; fora da faixa
+          // passava sem conferencia
+          if (!(n >= lo && n <= hi)) return toast(`${z.name}: digite de ${lo} a ${hi}`, true);
           b.classList.add("busy");
           try {
-            const r = await API.post("/api/zone/resize", {
-              device: d.key, zone: z.index, size: parseInt(inp.value, 10) });
-            toast(r.ok ? `${z.name}: ${inp.value} leds` : r.error, !r.ok);
+            const r = await API.post("/api/zone/resize", { device: d.key, zone: z.index, size: n });
+            if (r.ok) RASCUNHO_LEDS.delete(chave);
+            toast(r.ok ? `${z.name}: ${n} LEDs` : r.error, !r.ok);
           } catch (e) { toast(e.message, true); }
           b.classList.remove("busy");
           refreshState();
         });
+        inp.addEventListener("keydown", (e) => { if (e.key === "Enter") b.click(); });
         const find = document.createElement("button");
-        find.className = "btn sm primary";
+        // gradiente so onde ainda falta contar; com a contagem feita, tres
+        // botoes coloridos empilhados chamavam mais atencao que o resto
+        find.className = z.leds_count ? "btn sm ghost" : "btn sm primary";
         find.textContent = "Descobrir";
         find.title = "Abre o assistente para achar a contagem certa";
         find.addEventListener("click", () => openProbe(d.key, z.index, z.name));
@@ -1488,14 +1793,7 @@ function renderDevices() {
      comuns.</p>`);
 }
 
-$("#btnReconnect").addEventListener("click", async (e) => {
-  const b = e.currentTarget;
-  b.classList.add("busy");
-  setStatus("busy", "reconectando…");
-  try { await API.post("/api/reconnect"); } catch (err) { toast(err.message, true); }
-  b.classList.remove("busy");
-  refreshState();
-});
+$("#btnReconnect").addEventListener("click", (e) => reconectar(e.currentTarget));
 
 /* --------------------------------------------------------------- fontes */
 
@@ -1507,21 +1805,56 @@ function sourceRunning(kind) {
   return !!(s[kind] && s[kind].running);
 }
 
+/** O motivo que o servidor da para a camada estar sem dado, ou null. */
+function avisoDaCamada(L) {
+  return ((S.state && S.state.avisos) || {})[L.id] || null;
+}
+
+let ultimoFontesSig = null;
+function fontesSig(st) {
+  const s = st.sources || {};
+  return JSON.stringify([st.needed, ["audio", "screen", "sensors"].map((k) => {
+    const x = s[k] || {};
+    return [x.running, x.error, x.device_name, x.lhm, x.dll_present];
+  })]);
+}
+
+/** Troca a configuracao de uma fonte e diz se a captura abriu de verdade.
+ *  Antes o aviso era "atualizada" em todo caso, e o dispositivo que falhava
+ *  so aparecia trocando de aba. */
+async function aplicaFonte(kind, config, msgOk) {
+  try {
+    const r = await API.post("/api/source", { kind, config });
+    toast(r.em_uso ? msgOk : `${msgOk}; liga quando alguma camada usar`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+  await refreshState();
+  renderSources();
+}
+
 async function renderSources() {
   const box = $("#sourcesBody");
   const src = (S.state && S.state.sources) || {};
   const needed = (S.state && S.state.needed) || [];
+  ultimoFontesSig = fontesSig(S.state || {});
   box.innerHTML = "";
 
   box.appendChild(sourceCard("Audio", "audio", src.audio, needed, async (card) => {
     const d = await API.get("/api/audio-devices");
+    const lista = d.devices || [];
     const opts = [{ value: "", label: "Saida padrao (automatico)" }].concat(
-      (d.devices || []).map((x) => ({ value: String(x.index), label: x.name })));
-    const cur = String(((src.audio || {}).config || {}).device ?? "");
-    card.appendChild(field("Dispositivo de loopback", selectEl(opts, cur, async (v) => {
-      await API.post("/api/source", { kind: "audio", config: { device: v === "" ? null : parseInt(v, 10) } });
-      toast("Fonte de audio atualizada");
-      refreshState();
+      lista.map((x) => ({ value: String(x.index), label: x.name })));
+    const cfgA = (src.audio || {}).config || {};
+    // o numero do dispositivo muda quando se pluga outro; o nome guardado e
+    // o que acha o escolhido
+    const peloNome = cfgA.nome ? lista.find((x) => x.name === cfgA.nome) : null;
+    const cur = peloNome ? String(peloNome.index) : String(cfgA.device ?? "");
+    card.appendChild(field("Dispositivo de loopback", selectEl(opts, cur, (v) => {
+      const escolhido = lista.find((x) => String(x.index) === v);
+      aplicaFonte("audio", { device: v === "" ? null : parseInt(v, 10),
+                             nome: escolhido ? escolhido.name : null },
+                  "Fonte de audio atualizada");
     })));
     if (d.error) card.insertAdjacentHTML("beforeend", `<p class="src-err">${esc(d.error)}</p>`);
     if (src.audio && src.audio.device_name)
@@ -1540,14 +1873,19 @@ async function renderSources() {
     const d = await API.get("/api/screen-outputs");
     const opts = (d.outputs || []).map((x) => ({ value: String(x.index), label: x.name }));
     if (!opts.length) opts.push({ value: "0", label: "Saida 0" });
-    const cfg = (src.screen || {}).config || {};
-    card.appendChild(field("Monitor", selectEl(opts, String(cfg.output ?? 0), async (v) => {
-      await API.post("/api/source", { kind: "screen", config: { ...cfg, output: parseInt(v, 10) } });
-      toast("Monitor atualizado");
-      refreshState();
+    // Um objeto so, atualizado a cada mudanca: os dois controles espalhavam a
+    // configuracao lida ao montar o cartao, e mexer na taxa depois de trocar
+    // de monitor voltava a captura para o monitor antigo.
+    const cfg = { output: 0, fps: 30, ...((src.screen || {}).config || {}) };
+    card.appendChild(field("Monitor", selectEl(opts, String(cfg.output ?? 0), (v) => {
+      cfg.output = parseInt(v, 10);
+      aplicaFonte("screen", { ...cfg }, "Monitor atualizado");
     })));
-    const send = throttle((v) => API.post("/api/source", {
-      kind: "screen", config: { ...cfg, fps: Math.round(v) } }).then(refreshState), 400);
+    const send = throttle((v) => {
+      cfg.fps = Math.round(v);
+      API.post("/api/source", { kind: "screen", config: { ...cfg } })
+        .catch((e) => toast(e.message, true)).then(refreshState);
+    }, 400);
     card.appendChild(sliderField("Taxa de captura", cfg.fps ?? 30, 10, 60, 1, send,
       (v) => Math.round(v) + " fps"));
     if (src.screen && src.screen.fps) card.insertAdjacentHTML("beforeend",
@@ -1575,11 +1913,19 @@ async function renderSources() {
       card.appendChild(row);
     }
     updateSensorMeters();
-    if (!s.lhm) {
-      card.insertAdjacentHTML("beforeend",
-        `<p class="src-err">Temperaturas indisponiveis: ${esc(s.error || "LibreHardwareMonitorLib.dll ausente")}.
-         Coloque a DLL em <code>vendor/</code> e rode o Spectra como administrador.
-         Uso de CPU e RAM continua funcionando sem ela.</p>`);
+    // Com a DLL no lugar e a fonte ainda parada nao ha o que dizer. Faltando
+    // ela, vai o caminho inteiro: no app instalado a vendor/ do proprio app
+    // fica escondida em _internal, e "vendor/" sozinho nao levava a lugar
+    // nenhum.
+    if (!s.lhm && !(s.dll_present && !s.running)) {
+      card.insertAdjacentHTML("beforeend", s.dll_present === false
+        ? `<p class="src-err">Temperaturas indisponiveis: falta a
+           LibreHardwareMonitorLib.dll. Coloque o arquivo em
+           <code>${esc(s.dll_dir || "vendor")}</code> e abra o Spectra de novo.
+           Uso de CPU e RAM continua funcionando sem ela.</p>`
+        : `<p class="src-err">Temperaturas indisponiveis: ${esc(s.error || "a biblioteca de sensores nao abriu")}.
+           Rode o Spectra como administrador. Uso de CPU e RAM continua
+           funcionando sem ela.</p>`);
     }
   }));
 }
@@ -1628,8 +1974,9 @@ function sourceCard(title, kind, st, needed, fill) {
   card.className = "panel";
   const running = st && st.running;
   const wanted = needed.includes(kind);
+  // pedida e parada e problema, e nao pode ter a bolinha cinza da ociosa
   card.innerHTML = `<div class="panel-head"><h2>${title}</h2></div>
-    <div class="src-state"><span class="dot ${running ? "on" : ""}"></span>
+    <div class="src-state"><span class="dot ${running ? "on" : wanted ? "err" : ""}"></span>
       <span>${running ? "ativa" : wanted ? "solicitada, mas parada" : "ociosa (nenhuma camada usa)"}</span></div>`;
   if (st && st.error && !running)
     card.insertAdjacentHTML("beforeend", `<p class="src-err">${esc(st.error)}</p>`);
@@ -1643,7 +1990,9 @@ function sourceCard(title, kind, st, needed, fill) {
 function renderProfiles() {
   const ul = $("#profileList");
   const list = (S.state && S.state.profiles) || [];
-  const cur = S.state && S.state.last_profile;
+  // "atual" so enquanto a cena no ar e mesmo a do perfil: depois de aplicar
+  // um preset a marca seguia no perfil antigo
+  const cur = S.state && S.state.perfil_atual;
   ul.innerHTML = "";
   if (!list.length) {
     ul.innerHTML = `<li class="muted" style="justify-content:center">Nenhum perfil salvo ainda.</li>`;
@@ -1658,6 +2007,9 @@ function renderProfiles() {
     load.className = "btn sm";
     load.textContent = "Carregar";
     load.addEventListener("click", async () => {
+      // com desfazer, como o preset: um clique errado na lista trocava a cena
+      // montada a mao sem volta; o brilho entra, porque o perfil traz o dele
+      const antes = snapshotScene(true);
       // perfil recusado, como um arquivo corrompido, volta com ok falso e sem
       // erro: sem conferir, o aviso dizia que tinha carregado
       let r;
@@ -1668,7 +2020,8 @@ function renderProfiles() {
       S.selected = null;
       await refreshState();
       renderParams();
-      toast(`Perfil "${name}" carregado`);
+      renderProfiles();
+      toast(`Perfil "${name}" carregado`, false, undoAction(antes));
     });
     const del = document.createElement("button");
     del.className = "btn sm danger";
@@ -1698,21 +2051,45 @@ $("#btnSaveProfile").addEventListener("click", saveProfile);
 $("#profileName").addEventListener("keydown", (e) => {
   if (e.key === "Enter") saveProfile();
 });
+$("#profileName").addEventListener("input", desarmaSalvar);
+
+// Nome que ja existe pede um segundo clique, no mesmo padrao do Excluir.
+// A conferencia e do servidor, pelo nome ja limpo: "Jogo!" vira "Jogo", e
+// comparando o texto cru a interface sobrescrevia dizendo que era novo.
+let salvarArmado = null, salvarTimer = null;
+function desarmaSalvar() {
+  salvarArmado = null;
+  clearTimeout(salvarTimer);
+  const b = $("#btnSaveProfile");
+  b.textContent = "Salvar cena atual";
+  b.classList.remove("confirm");
+}
 
 async function saveProfile() {
   const inp = $("#profileName");
   const name = inp.value.trim();
   if (!name) return toast("Digite um nome para o perfil", true);
-  const existe = ((S.state && S.state.profiles) || []).includes(name);
+  const confirmado = salvarArmado === name;
   try {
-    const r = await API.post("/api/profile/save", { name });
+    const r = await API.post("/api/profile/save", { name, sobrescrever: confirmado });
+    if (r.existe) {
+      desarmaSalvar();
+      salvarArmado = name;
+      const b = $("#btnSaveProfile");
+      b.textContent = `Sobrescrever "${r.name}"?`;
+      b.classList.add("confirm");
+      salvarTimer = setTimeout(desarmaSalvar, 3500);
+      return;
+    }
+    desarmaSalvar();
     if (r.ok) {
       inp.value = "";
-      toast(existe ? `Perfil "${r.name}" sobrescrito` : `Perfil "${r.name}" salvo`);
+      toast(confirmado ? `Perfil "${r.name}" sobrescrito`
+        : r.name !== name ? `Perfil salvo como "${r.name}"` : `Perfil "${r.name}" salvo`);
       await refreshState();
       renderProfiles();
     } else toast(r.error, true);
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { desarmaSalvar(); toast(e.message, true); }
 }
 
 /* ------------------------------------------------------ controles do topo */
@@ -1743,7 +2120,7 @@ $("#btnPause").addEventListener("click", togglePause);
 async function togglePause() {
   const paused = !(S.state && S.state.settings && S.state.settings.paused);
   await API.post("/api/settings", { paused });
-  toast(paused ? "Render pausado, LEDs congelados" : "Render retomado");
+  toast(paused ? "Efeitos pausados, LEDs congelados" : "Efeitos retomados");
   refreshState();
 }
 
@@ -1811,6 +2188,14 @@ async function boot() {
   }
   buildQuickBar();
   await refreshState();
+  FAVS = new Set((S.state && S.state.favoritos) || []);
+  await migraArmazenamentoAntigo();
+  // Recarregar a pagina com o assistente aberto deixava a sessao dele no
+  // servidor: render pausado e conectores expandidos para a sondagem.
+  if (S.state && S.state.assistente_ativo && $("#probeModal").hidden) {
+    try { await API.post("/api/probe/finish", {}); } catch (e) {}
+    await refreshState();
+  }
   renderPresets();
   renderSetupBanner();
   renderNowPlaying();

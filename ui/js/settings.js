@@ -30,9 +30,11 @@ function renderSettings() {
   box.appendChild(out);
 
   const beh = panel("Comportamento");
+  // o aviso usa as palavras da chave: "modo exclusivo" nao aparece na tela
   beh.appendChild(switchEl("Fechar softwares de RGB concorrentes ao iniciar", st.exclusive_mode !== false,
     (v) => API.post("/api/settings", { exclusive_mode: v })
-      .then(() => toast(v ? "Modo exclusivo ligado" : "Modo exclusivo desligado"))));
+      .then(() => toast(v ? "Os concorrentes serao fechados ao iniciar"
+                          : "O Spectra nao fecha mais outros programas ao iniciar"))));
   beh.appendChild(hintEl("iCUE, GIGABYTE Control Center, Mystic Light, L-Connect, SignalRGB e afins. " +
     "Dois programas escrevendo no mesmo controlador e a causa classica de gabinete piscando."));
   beh.appendChild(switchEl("Subir o servidor do OpenRGB sozinho", st.autostart_openrgb !== false,
@@ -46,11 +48,15 @@ function renderSettings() {
   excl.addEventListener("click", async () => {
     excl.classList.add("busy");
     try {
-      const r = await API.post("/api/exclusive", {});
-      const n = (r.fechados || []).length;
-      const nomes = [...new Set((r.fechados || []).map((c) => c.rotulo))].join(", ");
-      toast(r.skipped ? "Modo exclusivo esta desligado"
-        : n ? `Fechei: ${nomes}` : "Nenhum concorrente rodando");
+      // vale mesmo com o fechamento automatico desligado: e para quem o
+      // desligou e quer fechar na mao quando precisar
+      const r = await API.post("/api/exclusive", { forcar: true });
+      const nomes = (lista) => listaNomes([...new Set((lista || []).map((c) => c.rotulo))]);
+      const fechados = nomes(r.fechados), falhou = nomes(r.falhou);
+      if (falhou)
+        toast(`${fechados ? `Fechei ${fechados}. ` : ""}Nao consegui fechar ${falhou}: ` +
+              "roda como servico, feche pelo proprio programa", true);
+      else toast(fechados ? `Fechei ${fechados}` : "Nenhum concorrente rodando");
     } catch (e) { toast(e.message, true); }
     excl.classList.remove("busy");
   });
@@ -71,15 +77,17 @@ function renderSettings() {
   ];
   kv.innerHTML = rows.map(([k, v]) => `<span>${esc(k)}</span><span>${v}</span>`).join("");
   about.appendChild(kv);
-  about.appendChild(hintEl("Fechar a janela minimiza para a bandeja e os efeitos continuam. " +
-    "Sair de verdade e pelo menu da bandeja; ao sair, os LEDs apagam."));
+  const bandeja = hintEl("Fechar a janela minimiza para a bandeja e os efeitos continuam. " +
+    "Sair de verdade e pelo menu da bandeja; ao sair, os LEDs apagam.");
+  bandeja.style.margin = "12px 0 0";
+  about.appendChild(bandeja);
   box.appendChild(about);
 
   const keys = panel("Atalhos de teclado");
   const sc = document.createElement("div");
   sc.className = "shortcuts";
   sc.innerHTML = [
-    ["Espaco", "pausar ou retomar o render"],
+    ["Espaco", "pausar ou retomar os efeitos"],
     ["/", "buscar efeito pronto"],
     ["Ctrl + 1 … 7", "trocar de aba"],
     ["Esc", "fechar o seletor de efeitos"],
