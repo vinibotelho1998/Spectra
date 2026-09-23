@@ -85,6 +85,10 @@ INTERVALO_MIN = 1.0 / 8.0
 # Baixo de proposito: quem acompanha uma cena manda cor ja suavizada, em
 # passos pequenos, e um limiar alto engoliria a transicao inteira.
 DELTA_MIN = 3
+# Envios falhando em sequencia que contam como teclado fora. No fluxo de
+# 50 Hz isso e meio segundo: rapido para quem tirou o cabo ou trocou o
+# chaveador, e longe de um soluco isolado do controlador.
+FALHAS_MAX = 25
 
 _setupapi = ctypes.WinDLL("setupapi")
 _hid = ctypes.WinDLL("hid")
@@ -330,6 +334,7 @@ class AkkoKeyboard:
         self._ultima = None
         self._quando = 0.0
         self._modo = None
+        self._falhas = 0
         self.erro = None
 
     @property
@@ -363,15 +368,34 @@ class AkkoKeyboard:
     def fechar(self):
         """Fecha o handle, se houver."""
         with self._lock:
-            if self._h is not None:
-                _k32.CloseHandle(self._h)
-                self._h = None
+            self._solta()
+
+    def _solta(self):
+        # O modo vai junto: o aparelho que volta a ser aberto pode ter sido
+        # religado e estar no efeito salvo, e sem o modo de fluxo de novo a
+        # cor mandada nao aparece.
+        if self._h is not None:
+            _k32.CloseHandle(self._h)
+            self._h = None
+        self._modo = None
+        self._ultima = None
+        self._falhas = 0
 
     def _envia(self, pacote: bytes) -> bool:
         buf = ctypes.create_string_buffer(self.tamanho)
         buf[0] = bytes([0])
         buf[1:1 + len(pacote)] = pacote
-        return bool(_hid.HidD_SetFeature(self._h, buf, self.tamanho))
+        if _hid.HidD_SetFeature(self._h, buf, self.tamanho):
+            self._falhas = 0
+            return True
+        self._falhas += 1
+        if self._falhas >= FALHAS_MAX:
+            # Handle de um teclado que saiu nao volta a valer, nem com ele
+            # plugado de novo. Fechando, o estado diz a verdade para a
+            # interface e a proxima abertura acha o aparelho outra vez.
+            self._solta()
+            self.erro = "teclado Akko parou de responder"
+        return False
 
     def set_cor(self, r: int, g: int, b: int, brilho: int = BRILHO_MAX,
                 forcar: bool = False) -> bool:

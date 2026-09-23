@@ -137,6 +137,8 @@ class SpectraApp:
         self.elevacao = {}
         self._reparando = False
         self.teclado = None
+        self._teclado_proxima = 0.0
+        self._fonte_espera = {}
         self.cor_teclado = (0, 0, 0)
 
     def _load_config(self) -> dict:
@@ -288,11 +290,21 @@ class SpectraApp:
             # media do gabinete fica parada enquanto a luz anda. Avaliando o
             # efeito na propria area do teclado, a onda passa por ele e a
             # cor muda de verdade.
-            with self._lock:
-                if self.renderer is None:
-                    return
-                aux.ctx.t = self.renderer.ctx.t
-                aux.settings["brightness"] = self.renderer.settings["brightness"]
+            #
+            # Sem a trava do app de proposito: isto roda dentro do laco de
+            # render, que ja segura a trava do renderizador, e as rotas da
+            # interface pegam as duas na ordem contraria. Tomar a do app aqui
+            # travava o render e a interface juntos. So ha leitura simples.
+            r = self.renderer
+            if r is None or not self.teclado.conectado:
+                return
+            aux.ctx.t = r.ctx.t
+            aux.settings["brightness"] = r.settings["brightness"]
+            # as fontes alimentam o contexto do gabinete; sem compartilhar,
+            # efeito de musica, tela ou sensor ficaria parado no teclado
+            aux.ctx.audio = r.ctx.audio
+            aux.ctx.screen = r.ctx.screen
+            aux.ctx.sensors = r.ctx.sensors
             quadro = aux.render_once(1.0 / 60.0)
             # Media simples da faixa, sem procurar tom dominante. Numa
             # faixa estreita a media ja e uma cor que existe na cena, e
@@ -315,9 +327,16 @@ class SpectraApp:
                 # Mesma gama do gabinete. Sem isso a rampa tem formato
                 # diferente nos dois lugares: o teclado passa tempo demais
                 # na parte clara e a subida nao bate com a do gabinete.
-                g = float(self.renderer.settings.get("gamma", 2.2))
-                forca = min(rel, 1.0) ** g if g and abs(g - 1.0) > 1e-3                     else min(rel, 1.0)
-                k = (piso + (1.0 - piso) * forca) * escala * 255.0
+                g = float(r.settings.get("gamma", 2.2))
+                curva = bool(g) and abs(g - 1.0) > 1e-3
+                forca = min(rel, 1.0) ** g if curva else min(rel, 1.0)
+                # O brilho geral vale aqui tambem, pela mesma gama. O ganho
+                # automatico acima normaliza a intensidade da cena, entao sem
+                # isso o teclado ignorava o slider e seguia aceso depois do
+                # botao de apagar os LEDs.
+                b = max(0.0, min(float(r.settings.get("brightness", 1.0)), 1.0))
+                k = ((piso + (1.0 - piso) * forca) * (b ** g if curva else b)
+                     * escala * 255.0)
                 cru = tuple(float(v) * k for v in tom)
 
             agora = time.monotonic()
@@ -561,15 +580,38 @@ class SpectraApp:
                                           name="spectra-watchdog", daemon=True)
         self._watchdog.start()
 
+    def _vigia_teclado(self):
+        """Reabre o teclado Akko que caiu, assim que ele volta a aparecer.
+
+        Vale so para um teclado que ja esteve aberto nesta sessao, e no
+        maximo a cada cinco segundos: quem nao tem um nao paga a varredura
+        de HID a cada volta do vigia.
+        """
+        t = self.teclado
+        if (t is None or t.conectado or not t.caminho or self.renderer is None
+                or not self.config.get("akko_keyboard", True)):
+            return
+        agora = time.monotonic()
+        if agora < self._teclado_proxima:
+            return
+        self._teclado_proxima = agora + 5.0
+        try:
+            self._liga_teclado()
+        except Exception as exc:
+            self.status_msg = f"teclado: {exc}"
+
     def _watchdog_loop(self):
         delay = 2.0
         while not self._watchdog_stop.wait(delay):
+            self._vigia_teclado()
             r = self.renderer
             if r is None:
                 continue
             # o assistente de descoberta e o reparo de privilegio mexem na
-            # conexao de proposito; o vigia nao pode disputar com eles
-            if getattr(self, "_probe_session", None) is not None or self._reparando:
+            # conexao de proposito; o vigia nao pode disputar com eles, nem
+            # com uma conexao que ja esta em andamento
+            if (getattr(self, "_probe_session", None) is not None
+                    or self._reparando or self.connecting):
                 delay = 2.0
                 continue
             alive = bool(r._thread and r._thread.is_alive())

@@ -5,6 +5,8 @@ um erro passaria despercebido ate alguem olhar o teclado.
 """
 from __future__ import annotations
 
+import types
+
 import pytest
 
 akko = pytest.importorskip("spectra.core.akko",
@@ -102,3 +104,41 @@ class TestMatriz:
 
     def test_matriz_fecha_nos_126(self):
         assert akko.LINHAS * akko.COLUNAS == akko.LEDS == 126
+
+
+class TestQueda:
+    """Teclado que sai do USB, com as chamadas do Windows trocadas por falsas."""
+
+    def _teclado(self, monkeypatch, respostas):
+        fechados = []
+        it = iter(respostas)
+        monkeypatch.setattr(akko, "_hid", types.SimpleNamespace(
+            HidD_SetFeature=lambda h, buf, n: next(it)))
+        monkeypatch.setattr(akko, "_k32", types.SimpleNamespace(
+            CloseHandle=fechados.append))
+        k = akko.AkkoKeyboard()
+        k._h, k.tamanho, k.caminho = 77, 65, "hid#akko"
+        return k, fechados
+
+    def test_envio_falhando_seguido_fecha_o_handle(self, monkeypatch):
+        k, fechados = self._teclado(monkeypatch, [0] * 100)
+        for _ in range(100):
+            k._envia(bytes(64))
+        assert k.conectado is False
+        assert fechados == [77]
+        assert k.erro
+
+    def test_falha_isolada_nao_derruba(self, monkeypatch):
+        k, fechados = self._teclado(monkeypatch, [0, 1] * 100)
+        for _ in range(200):
+            k._envia(bytes(64))
+        assert k.conectado is True
+        assert fechados == []
+
+    def test_ao_fechar_esquece_o_modo_de_fluxo(self, monkeypatch):
+        # o aparelho reaberto pode ter sido religado e estar no efeito salvo
+        k, _ = self._teclado(monkeypatch, [])
+        k._modo = akko.EFEITO_SINCRONIA_TELA
+        k.fechar()
+        assert k._modo is None
+        assert k.conectado is False
