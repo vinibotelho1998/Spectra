@@ -19,6 +19,26 @@ from .app import ROOT, SpectraApp
 UI_DIR = os.path.join(ROOT, "ui")
 ASSETS_DIR = os.path.join(ROOT, "assets")
 
+HOSTS_LOCAIS = {"127.0.0.1", "localhost", "[::1]"}
+
+
+def _host_estranho(headers) -> bool:
+    """Diz se o pedido chegou por um nome que nao e o loopback.
+
+    Um site pode apontar o proprio dominio para 127.0.0.1 depois de a pagina
+    carregar. Dai em diante o navegador manda pedido para ca com `Origin` e
+    `Host` do site, que batem entre si, e a conferencia de origem sozinha
+    deixa passar. O `Host` com o nome do site e o que denuncia.
+    """
+    host = (headers.get("Host") or "").strip().lower()
+    if not host:
+        return False
+    if host.startswith("["):
+        nome = host.split("]", 1)[0] + "]"
+    else:
+        nome = host.rsplit(":", 1)[0]
+    return nome not in HOSTS_LOCAIS
+
 
 class Handler(BaseHTTPRequestHandler):
     """Rotas da API e arquivos estaticos da interface.
@@ -68,6 +88,8 @@ class Handler(BaseHTTPRequestHandler):
         diferente da nossa, ou sem JSON, e recusado para que uma pagina
         qualquer nao apague os LEDs nem encerre o app.
         """
+        if _host_estranho(self.headers):
+            return True
         origin = self.headers.get("Origin")
         if origin:
             host = self.headers.get("Host") or ""
@@ -117,7 +139,9 @@ class Handler(BaseHTTPRequestHandler):
         else:
             base = UI_DIR
         path = os.path.normpath(os.path.join(base, rel))
-        if not path.startswith(base) or not os.path.isfile(path):
+        # com o separador no fim: sem ele, `../ui2/x` passaria por dentro de `ui`
+        if (not path.startswith(os.path.join(os.path.normpath(base), ""))
+                or not os.path.isfile(path)):
             return self._send(404, b"nao encontrado", "text/plain; charset=utf-8")
         ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
         if ctype.startswith("text/") or ctype in ("application/javascript",):
@@ -129,6 +153,9 @@ class Handler(BaseHTTPRequestHandler):
         """Responde a API de leitura e entrega os arquivos da interface."""
         p = self.path.split("?", 1)[0]
         a = self.app
+        if _host_estranho(self.headers):
+            return self._send(403, b"host nao permitido",
+                              "text/plain; charset=utf-8")
         if p == "/api/state":
             return self._json(a.state())
         if p == "/api/preview":
