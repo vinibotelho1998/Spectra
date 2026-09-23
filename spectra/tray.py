@@ -49,7 +49,11 @@ class Tray:
             return
         r.settings["paused"] = not r.settings.get("paused")
         if r.settings["paused"]:
-            r.blank()
+            # Com a trava do renderizador o quadro que estava sendo desenhado
+            # sai antes do preto. Sem ela, ele chegava depois e o gabinete
+            # ficava aceso, congelado, em vez de apagar.
+            with r._lock:
+                r.blank()
 
     def _sair(self, *_):
         self.quitting = True

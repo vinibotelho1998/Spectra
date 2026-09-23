@@ -388,6 +388,9 @@ class SpectraApp:
                                   for l in self.renderer.layers])
                     r.settings["brightness"] = self.renderer.settings["brightness"]
                     r.ctx.t = self.renderer.ctx.t
+                    r.ctx.audio = self.renderer.ctx.audio
+                    r.ctx.screen = self.renderer.ctx.screen
+                    r.ctx.sensors = self.renderer.ctx.sensors
                 quadro = r.render_once(1.0 / 60.0)
                 rgba = r.to_wire(quadro)
                 cores = {i: (int(rgba[i][0]), int(rgba[i][1]), int(rgba[i][2]))

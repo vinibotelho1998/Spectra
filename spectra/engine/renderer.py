@@ -25,6 +25,14 @@ from . import blend
 from .canvas import Canvas, device_key
 from .context import RenderContext
 
+# O relogio dos efeitos da a volta a cada CICLO_T segundos. Os efeitos somam
+# o tempo a arrays float32, e com o app dias seguidos na bandeja o tempo
+# cresce ate o float32 nao distinguir um quadro do seguinte: depois de uma
+# semana a animacao anda aos saltos, e depois de um mes para. Em dez mil
+# segundos a resolucao fica folgada; o preco, nos efeitos que nao fecham o
+# ciclo nesse tempo, e um salto a cada quase tres horas.
+CICLO_T = 10000.0
+
 
 class Layer:
     """Uma camada da cena: um efeito com parametros, blend e alvo.
@@ -147,11 +155,21 @@ class Renderer:
 
         Zera a memoria das camadas, ja que o estado guardado tem o tamanho do
         canvas antigo.
+
+        Os estados das fontes externas passam para o contexto novo. As fontes
+        de audio, tela e sensores guardam referencia a eles e seguem
+        escrevendo ali; trocar por estados novos deixaria todo efeito reativo
+        parado depois de mexer no layout ou de reconectar.
         """
         with self._lock:
+            antigo = self.ctx
             self.canvas = Canvas(self.all_devices, self.layout_config,
                                  self.settings.get("enabled_devices"))
             self.ctx = RenderContext(self.canvas)
+            if antigo is not None:
+                self.ctx.audio = antigo.audio
+                self.ctx.sensors = antigo.sensors
+                self.ctx.screen = antigo.screen
             self._prev = None
             for l in self.layers:
                 l._mask_key = None
@@ -264,7 +282,14 @@ class Renderer:
 
         Deixa `OpenRGBError` subir, porque perda de conexao precisa parar o laco
         em vez de virar quadro perdido em silencio.
+
+        Quadro de outro tamanho fica de fora. Acontece com o render pausado,
+        quando o canvas e remontado e o ultimo quadro ainda e o do canvas
+        velho: fatiado pelo novo, o ultimo dispositivo receberia um pacote
+        que declara mais cores do que carrega.
         """
+        if len(frame) != self.canvas.n:
+            return
         rgba = self.to_wire(frame)
         raw = rgba.tobytes()
         for dev_index, start, count in self.canvas.slices:
@@ -381,11 +406,16 @@ class Renderer:
             dt = now - t_prev
             t_prev = now
 
+            # A espera do render pausado fica fora da trava. Dentro dela, cada
+            # rota da interface que mexe na cena esperava ate 50 ms por pedido
+            # enquanto o render estava parado.
+            if self.settings.get("paused"):
+                time.sleep(0.05)
+                continue
             with self._lock:
                 if self.settings.get("paused"):
-                    time.sleep(0.05)
                     continue
-                self.ctx.t = now - t0
+                self.ctx.t = (now - t0) % CICLO_T
                 frame = self.render_once(min(dt, 0.25))
                 sm = float(self.settings.get("smoothing", 0.0))
                 if sm > 0.0 and self._prev is not None and self._prev.shape == frame.shape:
