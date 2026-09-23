@@ -349,6 +349,29 @@ class SocketOk:
         self.enviados.append(data)
 
 
+class SocketQueTroca:
+    """Falha no envio enquanto outra thread ja reconectou o cliente."""
+
+    def __init__(self, cliente, novo):
+        self.cliente = cliente
+        self.novo = novo
+
+    def sendall(self, data):
+        self.cliente.sock = self.novo
+        raise OSError(10038, "operacao em algo que nao e socket")
+
+
+class SocketQueSome:
+    """Entrega um byte por vez enquanto outra thread fecha o cliente."""
+
+    def __init__(self, cliente):
+        self.cliente = cliente
+
+    def recv(self, n):
+        self.cliente.sock = None
+        return b"\x00"
+
+
 class TestCliente:
 
     def test_envio_monta_o_header_com_magic(self):
@@ -409,3 +432,28 @@ class TestCliente:
 
     def test_versao_do_cliente_declarada(self):
         assert OpenRGBClient().protocol == CLIENT_PROTOCOL_VERSION
+
+    def test_queda_no_envio_nao_derruba_a_conexao_nova(self):
+        c = OpenRGBClient()
+        novo = SocketOk()
+        c.sock = SocketQueTroca(c, novo)
+        with pytest.raises(OpenRGBError):
+            c._send(0, 1050, b"\x00")
+        assert c.sock is novo
+
+    def test_leitura_sem_socket_vira_openrgberror(self):
+        with pytest.raises(OpenRGBError, match="nao conectado"):
+            OpenRGBClient()._recv_exact(4)
+
+    def test_fechar_no_meio_da_leitura_nao_vira_attributeerror(self):
+        c = OpenRGBClient()
+        c.sock = SocketQueSome(c)
+        assert c._recv_exact(4) == b"\x00" * 4
+
+    def test_fechar_duas_vezes_nao_quebra(self):
+        c = OpenRGBClient()
+        c.sock = SocketOk()
+        c.sock.close = lambda: None
+        c.close()
+        c.close()
+        assert c.sock is None

@@ -424,39 +424,50 @@ class OpenRGBClient:
 
     def close(self) -> None:
         """Fecha a conexao, se houver alguma aberta."""
-        if self.sock:
-            try:
-                self.sock.close()
-            finally:
-                self.sock = None
+        s, self.sock = self.sock, None
+        if s is not None:
+            s.close()
 
     @property
     def connected(self) -> bool:
         """Diz se existe socket aberto."""
         return self.sock is not None
 
+    def _perde(self, s) -> None:
+        # So esquece o socket que falhou. Uma reconexao feita por outra
+        # thread nesse meio tempo ja pos um socket novo no lugar, e zerar
+        # esse derrubaria a conexao recem aberta.
+        if self.sock is s:
+            self.sock = None
+
     def _send(self, dev: int, cmd: int, data: bytes = b"") -> None:
-        if not self.sock:
-            raise OpenRGBError("nao conectado ao servidor OpenRGB")
         pkt = HEADER.pack(MAGIC, dev, cmd, len(data)) + data
         with self._lock:
+            # lido uma vez so: `close` em outra thread zera o atributo, e
+            # reler aqui virava AttributeError, que o laco de render nao trata
+            s = self.sock
+            if s is None:
+                raise OpenRGBError("nao conectado ao servidor OpenRGB")
             try:
-                self.sock.sendall(pkt)
+                s.sendall(pkt)
             except OSError as exc:
-                self.sock = None
+                self._perde(s)
                 raise OpenRGBError(f"conexao perdida ao enviar: {exc}") from exc
 
     def _recv_exact(self, n: int) -> bytes:
+        s = self.sock
+        if s is None:
+            raise OpenRGBError("nao conectado ao servidor OpenRGB")
         chunks = []
         got = 0
         while got < n:
             try:
-                c = self.sock.recv(n - got)
+                c = s.recv(n - got)
             except OSError as exc:
-                self.sock = None
+                self._perde(s)
                 raise OpenRGBError(f"conexao perdida ao ler: {exc}") from exc
             if not c:
-                self.sock = None
+                self._perde(s)
                 raise OpenRGBError("conexao fechada pelo servidor OpenRGB")
             chunks.append(c)
             got += len(c)
