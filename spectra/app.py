@@ -147,6 +147,7 @@ class SpectraApp:
         self.status_msg = "iniciando"
         self.connected = False
         self._lock = threading.RLock()
+        self._conexao = threading.Lock()
         self._watchdog = None
         self._watchdog_stop = threading.Event()
         self.reconnects = 0
@@ -552,12 +553,17 @@ class SpectraApp:
         sairia com o tamanho errado de cada header. `connecting` fica ligado
         durante a tentativa, para a interface distinguir "ainda tentando" de
         "falhou".
+
+        Uma tentativa por vez: o vigia e o botao de reconectar chegam a
+        disparar juntos, e duas conexoes no mesmo cliente trocariam as
+        respostas uma da outra no meio do carregamento dos dispositivos.
         """
-        self.connecting = True
-        try:
-            return self._connect(exclusive_pass)
-        finally:
-            self.connecting = False
+        with self._conexao:
+            self.connecting = True
+            try:
+                return self._connect(exclusive_pass)
+            finally:
+                self.connecting = False
 
     def _connect(self, exclusive_pass: bool) -> bool:
         if exclusive_pass:
@@ -656,7 +662,14 @@ class SpectraApp:
 
             self.connected = False
             self.status_msg = "conexao com o OpenRGB caiu; reconectando"
-            if self.connect():
+            try:
+                ok = self.connect()
+            except Exception as exc:
+                # Erro fora do previsto nao pode matar o vigia: sem ele, a
+                # proxima queda do OpenRGB nunca mais seria reconectada.
+                self.status_msg = f"falha ao reconectar: {exc}"
+                ok = False
+            if ok:
                 self.reconnects += 1
                 self.status_msg = f"reconectado ({self.reconnects}x)"
                 delay = 2.0
