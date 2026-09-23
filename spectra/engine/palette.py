@@ -95,6 +95,19 @@ PALETTES: dict[str, list[str]] = {
 
 PALETTE_NAMES = list(PALETTES.keys())
 
+# O nome da chave fica gravado em perfil e preset e nao muda; isto e so o que
+# a interface mostra, que antes era o nome interno em ingles.
+PALETTE_LABELS: dict[str, str] = {
+    "rainbow": "Arco-iris", "fire": "Fogo", "ice": "Gelo", "aurora": "Aurora",
+    "sunset": "Por do sol", "ocean": "Oceano", "forest": "Floresta",
+    "neon": "Neon", "cyberpunk": "Cyberpunk", "vaporwave": "Vaporwave",
+    "lava": "Lava", "toxic": "Toxico", "magma": "Magma", "viridis": "Viridis",
+    "plasma": "Plasma", "turbo": "Turbo", "candy": "Doce", "gold": "Ouro",
+    "police": "Viatura", "mono_red": "Vermelho", "mono_green": "Verde",
+    "mono_blue": "Azul", "mono_purple": "Roxo", "mono_cyan": "Ciano",
+    "white": "Branco", "thermal": "Termico",
+}
+
 _CACHE: dict[tuple, np.ndarray] = {}
 _LUT_SIZE = 512
 # Cada lista de cores escolhida pela pessoa vira uma tabela nova, e arrastar

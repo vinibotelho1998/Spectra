@@ -205,10 +205,13 @@ class Renderer:
         with self._lock:
             self.layers = list(layers)
 
-    def add_layer(self, layer: Layer):
-        """Empilha uma camada nova por cima."""
+    def add_layer(self, layer: Layer, indice: int | None = None):
+        """Empilha uma camada nova por cima, ou na posicao `indice`."""
         with self._lock:
-            self.layers.append(layer)
+            if indice is None:
+                self.layers.append(layer)
+            else:
+                self.layers.insert(max(0, int(indice)), layer)
             return layer
 
     def remove_layer(self, layer_id: str):

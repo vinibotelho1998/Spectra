@@ -14,7 +14,7 @@ from .base import (ANGLE, INTENSITY, SOURCE_AXIS, SPEED, axis_values, boolean,
                    choice, color, colors, effect, integer, num, palette)
 
 
-@effect("static", "Cor Solida", "Basicos",
+@effect("static", "Cor Unica", "Basicos",
         "Uma cor fixa em todos os LEDs.",
         [color("color", "Cor", "#ff2d55"), INTENSITY()])
 def _static(ctx, p, st):

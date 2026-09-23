@@ -131,8 +131,12 @@ def SOURCE_AXIS(default="x"):
 
 
 def SCOPE(default="all"):
-    """Parametro que limita o efeito a um tipo de peca."""
-    return choice("scope", "Aplicar em", default, [
+    """Parametro que limita o efeito a um tipo de peca.
+
+    O rotulo nao pode ser "Aplicar em": esse ja e o campo dos alvos da
+    camada, no mesmo painel, e os dois lado a lado confundiam.
+    """
+    return choice("scope", "Tipo de peca", default, [
         ("all", "Tudo"), ("strips", "So nas fitas"), ("fans", "So nos fans"),
     ])
 

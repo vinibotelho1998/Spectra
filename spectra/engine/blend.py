@@ -92,7 +92,8 @@ MODES = {
 }
 
 LABELS = [
-    ("normal", "Normal"), ("alpha_over", "Sobrepor"), ("add", "Somar"),
+    ("normal", "Normal"), ("alpha_over", "Por cima, preto transparente"),
+    ("add", "Somar"),
     ("screen", "Clarear (screen)"), ("multiply", "Multiplicar"),
     ("overlay", "Sobreposicao"), ("soft_light", "Luz suave"),
     ("lighten", "Mais claro"), ("darken", "Mais escuro"),

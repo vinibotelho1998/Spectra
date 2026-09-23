@@ -64,7 +64,7 @@ PRESETS = [
            [L("cb_wave", {"speed": 0.4, "freq": 1.5, "lane_phase": 0.5},
               name="Onda")]),
 
-    Preset("cabo_ripple", "Ondulacao", "Cabo",
+    Preset("cabo_ripple", "Ondulacao no Cabo", "Cabo",
            "Aneis se expandindo de um ponto do cabo, atravessando laminas e "
            "comprimento ao mesmo tempo.",
            ["#000814", "#0055a4", "#8ae1ff", "#ffffff"],
@@ -114,7 +114,7 @@ PRESETS = [
            [L("cb_twinkle2d", {"rate": 14.0, "density": 0.2},
               name="Cintilar 2D")]),
 
-    Preset("cabo_espiral", "Espiral", "Cabo",
+    Preset("cabo_espiral", "Espiral no Cabo", "Cabo",
            "A cor gira em torno do eixo do cabo enquanto avanca — parece uma "
            "helice percorrendo a fita.",
            ["#0d0887", "#b12a90", "#e16462", "#fca636"],
@@ -327,10 +327,10 @@ PRESETS = [
            ["#001b26", "#00d4ff", "#8ae1ff", "#00d4ff", "#001b26"],
            [L("breathing", {"color": "#00d4ff", "speed": 0.35}, name="Respiracao")]),
 
-    Preset("solida", "Cor Fixa", "Essenciais",
+    Preset("solida", "Cor Unica", "Essenciais",
            "Uma cor parada. Ponto de partida para personalizar.",
            ["#ff2d55", "#ff2d55", "#ff2d55"],
-           [L("static", {"color": "#ff2d55"}, name="Cor fixa")]),
+           [L("static", {"color": "#ff2d55"}, name="Cor unica")]),
 
     Preset("ciclo", "Ciclo de Cor", "Essenciais",
            "Tudo junto trocando de cor lentamente.",
@@ -603,9 +603,12 @@ for _p in PRESETS:
     _p.refined = _p.id not in AGRESSIVOS
 
 
-CATEGORY_ORDER = ["Cabo", "Fitas Finas", "Fluxo", "Essenciais", "Ambiente",
-                  "Cenario", "Movimento", "Simulacao", "Audio", "Tela",
-                  "Sensores"]
+# Do que serve para qualquer gabinete ao que pede peca especifica: Cabo e
+# Fitas Finas sao para fita de cabo e fita fina, e na frente abriam a
+# vitrine com onze efeitos que quase ninguem tem onde ver.
+CATEGORY_ORDER = ["Essenciais", "Ambiente", "Movimento", "Fluxo", "Cenario",
+                  "Simulacao", "Audio", "Tela", "Sensores", "Fitas Finas",
+                  "Cabo"]
 
 
 def by_id(pid: str):
