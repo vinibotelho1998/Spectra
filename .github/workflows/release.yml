@@ -27,18 +27,33 @@ jobs:
       - name: Rodar a suite de testes
         run: python -m pytest
 
+      - name: Incrementar versao
+        id: ver
+        shell: pwsh
+        # Depois dos testes e antes de congelar: o app mostra spectra.__version__ no
+        # topo, entao o numero tem que estar no codigo e nao so no instalador.
+        run: |
+          $conteudo = Get-Content -Path "spectra/__init__.py" -Raw
+          $m = [regex]::Match($conteudo, '__version__\s*=\s*"(\d+)\.(\d+)\.(\d+)"')
+          if (-not $m.Success) { throw "Nao achei __version__ no formato X.Y.Z" }
+          $nova = "$($m.Groups[1].Value).$($m.Groups[2].Value).$([int]$m.Groups[3].Value + 1)"
+
+          $conteudo = $conteudo -replace '__version__\s*=\s*"\d+\.\d+\.\d+"', "__version__ = `"$nova`""
+          Set-Content -Path "spectra/__init__.py" -Value $conteudo -NoNewline
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add spectra/__init__.py
+          git commit -m "chore: incrementa versao para $nova [skip ci]"
+          git push origin HEAD:main
+
+          "version=$nova" >> $env:GITHUB_OUTPUT
+
       - name: Congelar o app (PyInstaller)
         run: pyinstaller spectra.spec --noconfirm
 
       - name: Instalar o Inno Setup
         run: choco install innosetup --no-progress -y
-
-      - name: Definir a versao do build
-        id: ver
-        shell: pwsh
-        run: |
-          $version = "1.0.$($env:GITHUB_RUN_NUMBER)"
-          "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Compilar o instalador
         shell: pwsh
