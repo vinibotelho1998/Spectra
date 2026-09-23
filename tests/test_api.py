@@ -7,15 +7,21 @@ rodar a suite nunca toque na configuracao real de quem esta desenvolvendo.
 
 from __future__ import annotations
 
+import json
+import threading
 import time
 import types
 
+import numpy as np
 import pytest
 
 from spectra import app as app_mod
+from spectra import server as server_mod
 from spectra.core.protocol import MODE_FLAG_HAS_PER_LED_COLOR, Device, Mode, Zone
-from spectra.engine.renderer import Renderer
+from spectra.effects.base import EFFECTS, EffectDef
+from spectra.engine.renderer import Layer, Renderer
 from spectra.server import Handler
+from spectra.tray import Tray
 
 
 def _mode(i, name, flags=0):
@@ -279,3 +285,602 @@ class TestOrigemDoPedido:
 
     def test_recusa_pedido_sem_tipo_de_conteudo(self):
         assert Handler._foreign(self._pedido(**{"Host": "127.0.0.1:7311"})) is True
+
+    def test_recusa_dominio_apontado_para_o_loopback(self):
+        # site que troca o proprio DNS para 127.0.0.1: Origin e Host batem
+        req = self._pedido(**{"Origin": "http://exemplo.invalido:7311",
+                              "Host": "exemplo.invalido:7311",
+                              "Content-Type": "application/json"})
+        assert Handler._foreign(req) is True
+
+    def test_aceita_localhost_pelo_nome(self):
+        req = self._pedido(**{"Origin": "http://localhost:7311",
+                              "Host": "localhost:7311",
+                              "Content-Type": "application/json"})
+        assert Handler._foreign(req) is False
+
+
+class Resposta:
+    """Faz as vezes do handler, guardando o que seria enviado."""
+
+    def __init__(self, path="/", host="127.0.0.1:7311"):
+        self.path = path
+        self.headers = {"Host": host}
+        self.app = types.SimpleNamespace(state=lambda: {"segredo": True})
+        self.code = None
+        self.body = None
+
+    def _send(self, code, body, ctype="application/json; charset=utf-8"):
+        self.code, self.body = code, body
+
+    def _json(self, obj, code=200):
+        self._send(code, json.dumps(obj).encode("utf-8"))
+
+
+class TestArquivosEstaticos:
+
+    @pytest.fixture
+    def ui(self, tmp_path, monkeypatch):
+        pasta = tmp_path / "ui"
+        pasta.mkdir()
+        (pasta / "index.html").write_text("ok", encoding="utf-8")
+        vizinha = tmp_path / "ui2"
+        vizinha.mkdir()
+        (vizinha / "segredo.txt").write_text("segredo", encoding="utf-8")
+        monkeypatch.setattr(server_mod, "UI_DIR", str(pasta))
+        return pasta
+
+    def test_serve_o_arquivo_da_interface(self, ui):
+        r = Resposta()
+        Handler._static(r, "/index.html")
+        assert r.code == 200
+        assert r.body == b"ok"
+
+    def test_nao_serve_pasta_vizinha_com_o_mesmo_comeco(self, ui):
+        r = Resposta()
+        Handler._static(r, "/../ui2/segredo.txt")
+        assert r.code == 404
+
+    def test_leitura_por_dominio_de_fora_e_recusada(self):
+        r = Resposta("/api/state", host="exemplo.invalido:7311")
+        Handler.do_GET(r)
+        assert r.code == 403
+        assert b"segredo" not in r.body
+
+    def test_leitura_pelo_loopback_passa(self):
+        r = Resposta("/api/state")
+        Handler.do_GET(r)
+        assert r.code == 200
+
+
+class TestPerfis:
+
+    def test_salva_carrega_e_apaga(self, spectra):
+        assert spectra.save_profile("Noite")["ok"]
+        assert "Noite" in spectra.list_profiles()
+        assert spectra.load_profile("Noite") is True
+        assert spectra.delete_profile("Noite") is True
+        assert "Noite" not in spectra.list_profiles()
+
+    def test_nome_com_caminho_nao_apaga_a_configuracao(self, spectra, tmp_path):
+        spectra.save_config()
+        assert (tmp_path / "config.json").exists()
+        assert spectra.delete_profile("../config") is False
+        assert (tmp_path / "config.json").exists()
+
+    def test_nome_com_caminho_nao_carrega_arquivo_de_fora(self, spectra, tmp_path):
+        (tmp_path / "fora.json").write_text(
+            json.dumps({"layers": [{"effect": "static"}]}), encoding="utf-8")
+        antes = [l.id for l in spectra.renderer.layers]
+        assert spectra.load_profile("../fora") is False
+        assert [l.id for l in spectra.renderer.layers] == antes
+
+    def test_perfil_com_formato_estranho_e_recusado(self, spectra, tmp_path):
+        (tmp_path / "profiles" / "torto.json").write_text("[1, 2]", encoding="utf-8")
+        assert spectra.load_profile("torto") is False
+
+    def test_perfil_estranho_na_abertura_cai_na_cena_padrao(self, spectra, tmp_path):
+        (tmp_path / "profiles" / "torto.json").write_text(
+            json.dumps({"layers": [1]}), encoding="utf-8")
+        spectra.config["last_profile"] = "torto"
+        spectra.renderer.layers = []
+        spectra._load_startup_scene()
+        assert [l.effect_id for l in spectra.renderer.layers] == ["rainbow_wave"]
+
+    def test_falha_ao_gravar_preserva_o_perfil_anterior(self, spectra, tmp_path):
+        spectra.save_profile("Noite")
+        arq = tmp_path / "profiles" / "Noite.json"
+        antes = arq.read_text(encoding="utf-8")
+        spectra.renderer.layers[0].params["quebra"] = object()
+        with pytest.raises(TypeError):
+            spectra.save_profile("Noite")
+        assert arq.read_text(encoding="utf-8") == antes
+        assert not (tmp_path / "profiles" / "Noite.json.tmp").exists()
+
+    def test_sem_a_pasta_a_lista_vem_vazia(self, spectra, tmp_path):
+        (tmp_path / "profiles").rmdir()
+        assert spectra.list_profiles() == []
+        json.dumps(spectra.state(), default=str)
+
+
+class TestConfiguracao:
+
+    def test_arquivo_ilegivel_fica_guardado_ao_lado(self, spectra, tmp_path):
+        (tmp_path / "config.json").write_text("{ quebrado", encoding="utf-8")
+        novo = app_mod.SpectraApp()
+        guardado = tmp_path / "config.json.corrompido"
+        assert guardado.read_text(encoding="utf-8") == "{ quebrado"
+        assert novo.config["exclusive_mode"] is True
+
+    def test_grava_mesmo_sem_a_pasta(self, spectra, tmp_path, monkeypatch):
+        destino = tmp_path / "sumiu"
+        monkeypatch.setattr(app_mod, "CONFIG_DIR", str(destino))
+        monkeypatch.setattr(app_mod, "CONFIG_FILE", str(destino / "config.json"))
+        spectra.save_config()
+        assert json.loads((destino / "config.json").read_text(encoding="utf-8"))
+
+
+class TestFontesAoRemontar:
+    """As fontes guardam o estado que receberam e seguem escrevendo nele."""
+
+    def test_mexer_no_layout_mantem_o_audio_chegando(self, spectra):
+        do_audio = spectra.renderer.ctx.audio
+        key = spectra.state()["devices"][0]["key"]
+        spectra.set_zone_geometry(key, 0, {"shape": "line", "x1": 0.1,
+                                           "y1": 0.5, "x2": 0.9, "y2": 0.5})
+        do_audio.level = 0.9
+        assert spectra.renderer.ctx.audio.level == 0.9
+
+    def test_trocar_dispositivos_mantem_tela_e_sensores(self, spectra):
+        ctx = spectra.renderer.ctx
+        spectra.renderer.set_devices(spectra.client.load_devices())
+        assert spectra.renderer.ctx is not ctx
+        assert spectra.renderer.ctx.screen is ctx.screen
+        assert spectra.renderer.ctx.sensors is ctx.sensors
+
+
+class FonteQueFalha:
+    """Fonte cuja captura nunca abre, contando quantas vezes tentaram."""
+
+    def __init__(self, *_a, **_k):
+        self.running = False
+        self.tentativas = 0
+
+    def start(self):
+        self.tentativas += 1
+        return False
+
+    def stop(self):
+        pass
+
+
+class TestFontesQueFalham:
+
+    def test_captura_quebrada_nao_e_reaberta_a_cada_passo(self, spectra):
+        # arrastar um slider manda uma mudanca de camada a cada 40 ms
+        fonte = FonteQueFalha()
+        spectra.audio = fonte
+        spectra.set_layers([{"effect": "audio_vu"}])
+        lid = spectra.renderer.layers[0].id
+        for i in range(10):
+            spectra.update_layer(lid, {"params": {"gain": 1.0 + i / 10}})
+        assert fonte.tentativas == 1
+
+    def test_configuracao_nova_tenta_na_hora(self, spectra, monkeypatch):
+        spectra.audio = FonteQueFalha()
+        spectra.set_layers([{"effect": "audio_vu"}])
+        nova = FonteQueFalha()
+        monkeypatch.setattr(app_mod, "AudioSource", lambda *a, **k: nova)
+        spectra.set_source_config("audio", {"device": 3})
+        assert nova.tentativas == 1
+
+
+class TecladoFalso:
+    """Teclado aberto que so anota a cor que receberia."""
+
+    def __init__(self):
+        self.conectado = True
+        self.plugado = True
+        self.caminho = "hid#akko"
+        self.cores = []
+        self.aberturas = 0
+
+    def abrir(self):
+        self.aberturas += 1
+        self.conectado = self.plugado
+        return self.conectado
+
+    def cor_em_fluxo(self, r, g, b):
+        self.cores.append((r, g, b))
+        return True
+
+    def to_json(self):
+        return {"kind": "akko", "connected": self.conectado}
+
+
+class TestTecladoAoVivo:
+
+    @pytest.fixture
+    def com_teclado(self, spectra, monkeypatch):
+        pytest.importorskip("spectra.core.akko", reason="modulo so existe no Windows")
+        # nenhuma fonte de verdade: tela e audio ficam so no estado
+        monkeypatch.setattr(spectra, "_sync_sources", lambda: None)
+        spectra.teclado = TecladoFalso()
+        spectra._liga_teclado()
+        return spectra
+
+    def test_pintar_nao_espera_a_trava_do_app(self, com_teclado):
+        # O laco de render chama isto segurando a trava do renderizador, e
+        # as rotas da interface pegam a do app antes da do renderizador.
+        # Esperar a do app aqui travava os dois lados para sempre.
+        pinta = com_teclado.renderer.ambiente
+        quadro = com_teclado.renderer.render_once(1 / 60)
+        pegou, solta = threading.Event(), threading.Event()
+
+        def dono():
+            with com_teclado._lock:
+                pegou.set()
+                solta.wait(5)
+
+        t = threading.Thread(target=dono, daemon=True)
+        t.start()
+        assert pegou.wait(2)
+        feito = threading.Event()
+        threading.Thread(target=lambda: (pinta(quadro), feito.set()),
+                         daemon=True).start()
+        try:
+            assert feito.wait(1.0), "o teclado ficou esperando a trava do app"
+        finally:
+            solta.set()
+            t.join(2)
+
+    def test_efeito_de_tela_chega_ao_teclado(self, com_teclado):
+        com_teclado.set_layers([{"effect": "screen_average",
+                                 "params": {"smooth": 0.0, "dominant": False}}])
+        com_teclado.renderer.ctx.screen.average[:] = (1.0, 0.0, 0.0)
+        pinta = com_teclado.renderer.ambiente
+        pinta(com_teclado.renderer.render_once(1 / 60))
+        r, g, b = com_teclado.teclado.cores[-1]
+        assert r > 200 and g == 0 and b == 0
+
+    def _cor_com_brilho(self, app, brilho):
+        app.config["akko_suavizacao"] = 0.0
+        app._liga_teclado()
+        app.set_layers([{"effect": "static", "params": {"color": "#ff0000"}}])
+        app.update_settings({"brightness": brilho})
+        app.renderer.ambiente(app.renderer.render_once(1 / 60))
+        return app.teclado.cores[-1]
+
+    def test_apagar_os_leds_apaga_o_teclado(self, com_teclado):
+        assert self._cor_com_brilho(com_teclado, 0.0) == (0, 0, 0)
+
+    def test_brilho_pela_metade_escurece_o_teclado(self, com_teclado):
+        cheio = self._cor_com_brilho(com_teclado, 1.0)
+        metade = self._cor_com_brilho(com_teclado, 0.5)
+        assert cheio == (255, 0, 0)
+        assert 0 < metade[0] < cheio[0]
+
+    def test_teclado_fora_nao_recebe_cor(self, com_teclado):
+        com_teclado.teclado.conectado = False
+        com_teclado.renderer.ambiente(com_teclado.renderer.render_once(1 / 60))
+        assert com_teclado.teclado.cores == []
+
+    def test_vigia_reabre_o_teclado_que_voltou(self, com_teclado):
+        t = com_teclado.teclado
+        t.conectado = t.plugado = False
+        com_teclado.renderer.ambiente = None
+        com_teclado._vigia_teclado()
+        assert t.aberturas == 1
+        assert com_teclado.renderer.ambiente is None
+        t.plugado = True
+        com_teclado._teclado_proxima = 0.0
+        com_teclado._vigia_teclado()
+        assert t.conectado is True
+        assert com_teclado.renderer.ambiente is not None
+
+    def test_vigia_espera_entre_uma_procura_e_outra(self, com_teclado):
+        t = com_teclado.teclado
+        t.conectado = t.plugado = False
+        com_teclado._vigia_teclado()
+        antes = t.aberturas
+        com_teclado._vigia_teclado()
+        assert t.aberturas == antes
+
+    def test_vigia_nao_procura_teclado_que_nunca_abriu(self, com_teclado):
+        t = com_teclado.teclado
+        t.conectado = t.plugado = False
+        t.caminho = None
+        antes = t.aberturas
+        com_teclado._vigia_teclado()
+        assert t.aberturas == antes
+
+    def test_vigia_da_conexao_reabre_o_teclado(self, com_teclado, monkeypatch):
+        # a procura so acontece se o laco do vigia a chamar a cada volta
+        t = com_teclado.teclado
+        t.conectado = False
+        com_teclado.renderer.ambiente = None
+        monkeypatch.setattr(com_teclado, "_connect", lambda exclusive_pass: True)
+        com_teclado._watchdog_stop = ParadaDepoisDe(1)
+        com_teclado._watchdog_loop()
+        assert t.conectado is True
+        assert com_teclado.renderer.ambiente is not None
+
+
+class TestConexao:
+
+    def test_duas_tentativas_ao_mesmo_tempo_viram_fila(self, spectra, monkeypatch):
+        dentro, maximo = [0], [0]
+        conta = threading.Lock()
+
+        def falso(exclusive_pass):
+            with conta:
+                dentro[0] += 1
+                maximo[0] = max(maximo[0], dentro[0])
+            time.sleep(0.15)
+            with conta:
+                dentro[0] -= 1
+            return True
+
+        monkeypatch.setattr(spectra, "_connect", falso)
+        ts = [threading.Thread(target=spectra.connect) for _ in range(3)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(5)
+        assert maximo[0] == 1
+        assert spectra.connecting is False
+
+
+class TestCamadas:
+
+    def _tres(self, spectra):
+        spectra.set_layers([{"effect": "static", "id": i} for i in "abc"])
+
+    def test_opacidade_em_texto_nao_derruba_o_render(self, spectra):
+        lid = spectra.renderer.layers[0].id
+        spectra.update_layer(lid, {"opacity": "0.5", "enabled": 1})
+        assert spectra.renderer.layers[0].opacity == 0.5
+        assert spectra.renderer.layers[0].enabled is True
+        spectra.renderer.render_once(1 / 60)
+
+    def test_reordenar_sem_citar_uma_camada_nao_a_apaga(self, spectra):
+        self._tres(spectra)
+        spectra.reorder_layers(["c", "a"])
+        assert [l.id for l in spectra.renderer.layers] == ["c", "a", "b"]
+
+    def test_id_repetido_na_ordem_conta_uma_vez(self, spectra):
+        self._tres(spectra)
+        spectra.reorder_layers(["b", "a", "b", "c"])
+        assert [l.id for l in spectra.renderer.layers] == ["b", "a", "c"]
+
+
+class TestQuadroDeCanvasAnterior:
+
+    def test_nao_vai_pacote_com_contagem_maior_que_as_cores(self, spectra):
+        # render pausado e canvas remontado: o ultimo quadro e do tamanho velho
+        r = spectra.renderer
+        velho = np.zeros((r.canvas.n - 3, 3), dtype=np.float32)
+        enviados = []
+        spectra.client.update_leds = (
+            lambda i, cores, n: enviados.append((len(cores), n)))
+        r.push(velho)
+        assert all(tam == 4 * n for tam, n in enviados)
+
+    def test_brilho_com_render_pausado_depois_de_religar_dispositivo(self, spectra):
+        r = spectra.renderer
+        key = spectra.state()["devices"][1]["key"]
+        spectra.update_settings({"enabled_devices": {key: False}})
+        r.frame = r.render_once(1 / 60)
+        r.settings["paused"] = True
+        spectra.update_settings({"enabled_devices": {key: True}})
+        enviados = []
+        spectra.client.update_leds = (
+            lambda i, cores, n: enviados.append((len(cores), n)))
+        spectra.update_settings({"brightness": 0.3})
+        assert all(tam == 4 * n for tam, n in enviados)
+
+
+class RelogioDeUmMes:
+    """Relogio que salta trinta dias logo depois do laco comecar."""
+
+    def __init__(self):
+        self.chamadas = 0
+
+    def perf_counter(self):
+        self.chamadas += 1
+        return 0.0 if self.chamadas == 1 else 30 * 86400.0 + self.chamadas * 1e-3
+
+    def sleep(self, s):
+        time.sleep(min(s, 0.002))
+
+
+class TestRelogioDosEfeitos:
+
+    def test_tempo_dos_efeitos_nao_cresce_sem_fim(self, spectra, monkeypatch):
+        # com um mes de app ligado, o float32 dos efeitos ja nao anda
+        from spectra.engine import renderer as renderer_mod
+        monkeypatch.setattr(renderer_mod, "time", RelogioDeUmMes())
+        r = spectra.renderer
+        r.start()
+        prazo = time.monotonic() + 2.0
+        while r.ctx.frame < 3 and time.monotonic() < prazo:
+            time.sleep(0.01)
+        r.stop()
+        assert r.ctx.frame >= 3
+        assert 0.0 <= r.ctx.t < 86400.0
+
+
+class TestAssistenteDuranteOPiscar:
+
+    def test_render_nao_fica_parado_depois_do_assistente(self, spectra):
+        key = spectra.state()["devices"][0]["key"]
+        spectra.identify_zone(key, 0, seconds=5)
+        assert spectra.renderer.settings["paused"] is True
+        assert spectra.probe_multi_start()["ok"] is True
+        spectra.probe_finish()
+        assert spectra.renderer.settings["paused"] is False
+
+
+class QuadroLento:
+    """Efeito que para no meio do quadro ate o teste soltar.
+
+    E o jeito de pegar o laco de render com a trava na mao, desenhando, para
+    outra thread mexer na cena exatamente nesse momento.
+    """
+
+    def __init__(self, monkeypatch, app):
+        self.dentro = threading.Event()
+        self.solta = threading.Event()
+        monkeypatch.setitem(EFFECTS, "teste_lento", EffectDef(
+            "teste_lento", "Lento", "Basicos", "", [], self._fn))
+        app.set_layers([{"effect": "teste_lento", "id": "L"}])
+
+    def _fn(self, ctx, p, st):
+        st["fase"] = 1.0
+        self.dentro.set()
+        self.solta.wait(2)
+        return np.full((ctx.n, 3), st["fase"], dtype=np.float32)
+
+
+class TestCenaDuranteOQuadro:
+
+    def test_trocar_o_efeito_no_meio_do_quadro_nao_desliga_a_camada(
+            self, spectra, monkeypatch):
+        # sem a trava do renderizador o estado era limpo com o efeito ainda
+        # rodando, e o erro dele desligava a camada como se fosse defeito
+        lento = QuadroLento(monkeypatch, spectra)
+        r = spectra.renderer
+        r.start()
+        try:
+            assert lento.dentro.wait(2)
+            t = threading.Thread(target=spectra.update_layer,
+                                 args=("L", {"effect": "static"}), daemon=True)
+            t.start()
+            time.sleep(0.1)
+            lento.solta.set()
+            t.join(2)
+        finally:
+            lento.solta.set()
+            r.stop()
+        camada = r.get_layer("L")
+        assert camada.effect_id == "static"
+        assert camada.enabled is True
+        assert r.last_error is None
+
+    def test_pausar_pela_bandeja_apaga_mesmo_com_quadro_em_andamento(
+            self, spectra, monkeypatch):
+        lento = QuadroLento(monkeypatch, spectra)
+        r = spectra.renderer
+        r.start()
+        try:
+            assert lento.dentro.wait(2)
+            threading.Timer(0.1, lento.solta.set).start()
+            Tray(None, spectra, lambda: None)._alternar_pausa()
+            time.sleep(0.1)
+        finally:
+            lento.solta.set()
+            r.stop()
+        assert r.settings["paused"] is True
+        # o ultimo pacote de cada dispositivo tem que ser o preto
+        assert all(set(cores) == {0} for cores in spectra.client.last.values())
+
+    def test_render_pausado_nao_segura_a_trava(self, spectra):
+        r = spectra.renderer
+        r.settings["paused"] = True
+        r.start()
+        livres = 0
+        try:
+            time.sleep(0.05)
+            for _ in range(20):
+                if r._lock.acquire(blocking=False):
+                    r._lock.release()
+                    livres += 1
+                time.sleep(0.005)
+        finally:
+            r.stop()
+        assert livres == 20
+
+
+class ParadaDepoisDe:
+    """Faz as vezes do evento de parada do vigia, liberando algumas voltas."""
+
+    def __init__(self, voltas):
+        self.voltas = voltas
+
+    def wait(self, _timeout):
+        self.voltas -= 1
+        return self.voltas < 0
+
+
+class TestVigia:
+
+    def test_erro_inesperado_ao_reconectar_nao_mata_o_vigia(self, spectra,
+                                                             monkeypatch):
+        tentativas = []
+
+        def quebra(exclusive_pass):
+            tentativas.append(exclusive_pass)
+            raise RuntimeError("falha inesperada")
+
+        monkeypatch.setattr(spectra, "_connect", quebra)
+        spectra._watchdog_stop = ParadaDepoisDe(3)
+        spectra.renderer.connection_lost = True
+        spectra._watchdog_loop()
+        assert len(tentativas) == 3
+        assert "falha inesperada" in spectra.status_msg
+        assert spectra.connecting is False
+
+
+class TestConcorrenciaNasRotas:
+    """Duas threads do servidor atendendo pedidos ao mesmo tempo."""
+
+    def test_duas_sincronias_de_fonte_juntas_criam_uma_so(self, spectra,
+                                                          monkeypatch):
+        # a conexao e a carga de perfil sincronizam as fontes sem a trava do
+        # app, e a fonte que sobrasse capturaria para sempre
+        criadas = []
+
+        class FonteLenta(FonteQueFalha):
+            def __init__(self, *a, **k):
+                super().__init__()
+                criadas.append(self)
+                time.sleep(0.1)
+
+        monkeypatch.setattr(app_mod, "AudioSource", FonteLenta)
+        with spectra.renderer._lock:
+            spectra.renderer.layers = [Layer("audio_vu")]
+        ts = [threading.Thread(target=spectra._sync_sources, daemon=True)
+              for _ in range(2)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(2)
+        assert len(criadas) == 1
+        assert spectra.audio is criadas[0]
+
+    def test_salvar_o_mesmo_perfil_duas_vezes_juntas_vira_fila(
+            self, spectra, tmp_path, monkeypatch):
+        dentro, maximo = [0], [0]
+        conta = threading.Lock()
+        real = app_mod._grava_json
+
+        def lento(path, data):
+            if path.endswith("Noite.json"):
+                with conta:
+                    dentro[0] += 1
+                    maximo[0] = max(maximo[0], dentro[0])
+                time.sleep(0.1)
+                with conta:
+                    dentro[0] -= 1
+            real(path, data)
+
+        monkeypatch.setattr(app_mod, "_grava_json", lento)
+        ts = [threading.Thread(target=spectra.save_profile, args=("Noite",),
+                               daemon=True) for _ in range(2)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(2)
+        assert maximo[0] == 1
+        arq = tmp_path / "profiles" / "Noite.json"
+        assert json.loads(arq.read_text(encoding="utf-8"))["layers"]
