@@ -279,6 +279,10 @@ async function applyPreset(id) {
 function renderNowPlaying() {
   const box = $("#nowPlaying");
   if (!box) return;
+  // o estado chega a cada 1,5 s; remontar por baixo de quem esta arrastando
+  // um slider ou com o seletor de cor aberto aqui cortaria o gesto no meio
+  const foco = document.activeElement;
+  if (foco && box.contains(foco) && typing(foco)) return;
   const st = S.state || {};
   const p = presetById(st.last_preset);
   const layers = st.layers || [];
@@ -346,9 +350,13 @@ function renderNowPlaying() {
 
 /* ----------------------------------------------------- aviso de instalacao */
 
-function renderSetupBanner() {
+function renderSetupBanner(force) {
   const box = $("#setupBanner");
   if (!box) return;
+  // nao apagar a contagem que a pessoa esta digitando: sem isso o proximo
+  // estado, 1,5 s depois, remontava a linha e o campo voltava vazio
+  const foco = document.activeElement;
+  if (!force && foco && box.contains(foco) && typing(foco)) return;
   const st = S.state || {};
   const todo = st.setup_todo || [];
   const leds = (st.canvas && st.canvas.led_count) || 0;
@@ -473,7 +481,7 @@ function renderSetupBanner() {
       }
       btn.classList.remove("busy");
       await refreshState();
-      renderSetupBanner();
+      renderSetupBanner(true);
       renderPresets();
     };
     row.querySelector(".apply").addEventListener("click", (e) => aplicar(e.currentTarget));

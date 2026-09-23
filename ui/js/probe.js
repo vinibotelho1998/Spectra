@@ -46,6 +46,13 @@ async function startWizard(list) {
     W.perPiece = {};
     W.round = 0;
     W.step = 0;
+    // o que sobrou de um assistente cancelado no meio nao pode vazar para
+    // este: cor ja marcada como vista desviaria a contagem sem a pessoa
+    // ter respondido, e o indice velho abriria no conector errado
+    W.seen = new Set();
+    W._verifyIdx = 0;
+    W._assignIdx = 0;
+    W._splitIdx = 0;
     $("#probeModal").hidden = false;
     renderStep();
   } catch (e) {

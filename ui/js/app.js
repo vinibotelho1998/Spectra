@@ -1347,10 +1347,10 @@ function cartaoTeclado(st) {
                     : `<span class="tag err">sem conexao</span>`}
       <span class="spacer"></span>
     </div>
-    <p class="hint">Fora do OpenRGB, que nao tem driver para ele. Os efeitos
-     desenham nas teclas, mas como imagem parada que se refaz a cada troca de
-     cena: o controlador reaplica a luz a cada comando e animar faria ele
-     piscar.${t.error ? " <b>" + esc(t.error) + "</b>" : ""}</p>`;
+    <p class="hint">Fora do OpenRGB, que nao tem driver para ele. Acompanha a
+     cena ao vivo com uma cor so, pelo canal de fluxo do firmware: cor por
+     tecla ele so aceita como imagem parada, porque reaplica a luz a cada
+     comando e animar faria ele piscar.${t.error ? " <b>" + esc(t.error) + "</b>" : ""}</p>`;
 
   const sw = switchEl("Controlar pelo Spectra", st.akko_keyboard !== false,
     async (v) => {
@@ -1364,9 +1364,12 @@ function cartaoTeclado(st) {
 function renderDevices() {
   const box = $("#deviceList");
   const info = $("#deviceInfo");
-  // nao remontar por baixo de quem esta digitando a contagem de LEDs
+  // nao remontar por baixo de quem esta digitando a contagem de LEDs; so o
+  // campo numerico conta, porque a chave de liga e desliga tambem e INPUT e
+  // fica com o foco depois do clique, e o cartao nao se atualizava mais
   const foco = document.activeElement;
-  if (foco && foco.tagName === "INPUT" && box.contains(foco)) return;
+  if (foco && foco.tagName === "INPUT" && foco.type === "number" &&
+      box.contains(foco)) return;
   const st = S.state || {};
   const devs = st.devices || [];
   box.innerHTML = "";
@@ -1655,7 +1658,13 @@ function renderProfiles() {
     load.className = "btn sm";
     load.textContent = "Carregar";
     load.addEventListener("click", async () => {
-      await API.post("/api/profile/load", { name });
+      // perfil recusado, como um arquivo corrompido, volta com ok falso e sem
+      // erro: sem conferir, o aviso dizia que tinha carregado
+      let r;
+      try {
+        r = await API.post("/api/profile/load", { name });
+      } catch (e) { return toast(e.message, true); }
+      if (!r.ok) return toast(`Nao consegui carregar o perfil "${name}"`, true);
       S.selected = null;
       await refreshState();
       renderParams();
