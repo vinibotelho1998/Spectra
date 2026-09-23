@@ -58,7 +58,12 @@ class AudioSource:
         except Exception as exc:
             return [], str(exc)
         out = []
-        p = pa.PyAudio()
+        # sem nenhum dispositivo de audio a propria inicializacao falha; solta,
+        # a excecao derrubava o pedido da interface sem resposta nenhuma
+        try:
+            p = pa.PyAudio()
+        except Exception as exc:
+            return [], str(exc)
         try:
             for info in p.get_loopback_device_info_generator():
                 out.append({"index": info["index"], "name": info["name"],
@@ -124,6 +129,13 @@ class AudioSource:
     def stop(self):
         """Fecha o fluxo e para a analise."""
         self._stop.set()
+        # Espera o laco de decaimento sair. Solto, ele ainda estaria vivo se
+        # a fonte religasse logo em seguida: o `start` o tomaria por captura
+        # ativa e nao abriria o fluxo, ou limparia o sinal de parada e
+        # deixaria dois lacos decaindo a batida em dobro.
+        t = self._thread
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=1.0)
         try:
             if self._stream:
                 self._stream.stop_stream()

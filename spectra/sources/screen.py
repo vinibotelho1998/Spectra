@@ -59,6 +59,11 @@ class ScreenSource:
         """
         if self._thread and self._thread.is_alive():
             return True
+        if self._cam is not None:
+            # A leitura morreu e deixou a camera para tras. Sem fechar, o
+            # dxcam devolveria a mesma instancia e recusaria o novo start se
+            # ela ainda estivesse capturando.
+            self.stop()
         try:
             import dxcam
         except Exception as exc:
@@ -99,8 +104,13 @@ class ScreenSource:
 
     @property
     def running(self) -> bool:
-        """Diz se a captura esta ativa."""
-        return self._cam is not None
+        """Diz se a captura esta ativa.
+
+        Conta a thread de leitura tambem: com ela morta a camera ainda
+        existe, mas nenhum quadro novo chega ao estado.
+        """
+        return (self._cam is not None and self._thread is not None
+                and self._thread.is_alive())
 
     def _downscale(self, img: np.ndarray) -> np.ndarray:
         ih, iw = img.shape[:2]
@@ -131,6 +141,14 @@ class ScreenSource:
                 self.error = str(exc)
                 break
             if frame is None:
+                # Erro na thread da camera encerra a captura, e ela nao volta
+                # sozinha: dali em diante so vem nada. Insistir deixava a
+                # fonte marcada como ativa com a imagem congelada, sem erro
+                # nenhum na interface. Nada com a captura de pe e so a troca
+                # de resolucao, que passa no quadro seguinte.
+                if not getattr(self._cam, "is_capturing", True):
+                    self.error = "a captura de tela parou"
+                    break
                 time.sleep(0.005)
                 continue
             small = self._downscale(frame)

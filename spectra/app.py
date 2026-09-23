@@ -698,7 +698,28 @@ class SpectraApp:
                 need.update(d.needs)
         return need
 
+    def _liga_fonte(self, kind: str, src):
+        """Liga uma fonte parada, sem insistir a cada mudanca de camada.
+
+        Abrir captura que vai falhar custa caro: o PortAudio sozinho leva
+        centenas de milissegundos enumerando dispositivos, e isto roda com a
+        trava do app a cada passo de slider. Depois de uma falha, a proxima
+        tentativa espera alguns segundos.
+        """
+        if src.running or time.monotonic() < self._fonte_espera.get(kind, 0.0):
+            return
+        if not src.start():
+            self._fonte_espera[kind] = time.monotonic() + 5.0
+
     def _sync_sources(self):
+        # A trava vem aqui dentro porque a conexao e a carga de perfil chamam
+        # isto sem ela. Duas chamadas juntas viam a fonte ainda vazia e
+        # criavam uma cada: a que sobrava seguia capturando para sempre, sem
+        # ninguem que a parasse.
+        with self._lock:
+            self._sync_sources_travado()
+
+    def _sync_sources_travado(self):
         need = self._needed_sources()
         ctx = self.renderer.ctx
 
@@ -706,8 +727,7 @@ class SpectraApp:
             if self.audio is None:
                 dev = (self.config.get("sources", {}).get("audio") or {}).get("device")
                 self.audio = AudioSource(ctx.audio, device_index=dev)
-            if not self.audio.running:
-                self.audio.start()
+            self._liga_fonte("audio", self.audio)
         elif self.audio and self.audio.running:
             self.audio.stop()
 
@@ -717,16 +737,14 @@ class SpectraApp:
                 self.screen = ScreenSource(ctx.screen,
                                            output_idx=cfg.get("output", 0),
                                            fps=cfg.get("fps", 30))
-            if not self.screen.running:
-                self.screen.start()
+            self._liga_fonte("screen", self.screen)
         elif self.screen and self.screen.running:
             self.screen.stop()
 
         if "sensors" in need:
             if self.sensors is None:
                 self.sensors = SensorSource(ctx.sensors)
-            if not self.sensors.running:
-                self.sensors.start()
+            self._liga_fonte("sensors", self.sensors)
         elif self.sensors and self.sensors.running:
             self.sensors.stop()
 
@@ -1067,6 +1085,8 @@ class SpectraApp:
         with self._lock:
             self.config.setdefault("sources", {})[kind] = cfg
             self.save_config()
+            # configuracao nova merece tentativa na hora, sem a espera da falha
+            self._fonte_espera.pop(kind, None)
             src = {"audio": self.audio, "screen": self.screen}.get(kind)
             if src:
                 src.stop()
