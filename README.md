@@ -114,7 +114,7 @@ conforme as camadas ativas.
 Sete abas, todas sobre o mesmo motor:
 
 - **Efeitos** — a vitrine. Filtro por categoria, busca, favoritos que ficam
-  salvos no navegador, uma barra de **cor única** para quando a vontade é só
+  salvos na configuração, uma barra de **cor única** para quando a vontade é só
   "deixa tudo laranja", e *Surpreenda-me*. O painel **Tocando agora** traz
   velocidade, paleta e cor da cena aplicada ali mesmo, sem precisar abrir o
   editor. Toda troca de cena mostra **Desfazer** por alguns segundos.
@@ -128,7 +128,8 @@ Sete abas, todas sobre o mesmo motor:
   está em modo Direct e quem não está (e por quê).
 - **Fontes** — áudio, tela e sensores, com espectro ao vivo e a cor média da
   tela para conferir que a captura está mesmo chegando.
-- **Perfis** — a cena inteira salva por nome; a última volta sozinha ao abrir.
+- **Perfis** — a cena inteira salva por nome, para alternar entre cenas. A cena
+  no ar volta sozinha ao abrir, com ou sem perfil.
 - **Ajustes** — gama, taxa de quadros, suavização, modo exclusivo, início
   automático do OpenRGB e a lista de atalhos.
 
@@ -167,12 +168,13 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
   janela do OpenRGB — dois programas escrevendo no mesmo controlador é a causa
   clássica do gabinete inteiro piscando.
 - **Instância única.** Um mutex nomeado impede duas cópias rodando ao mesmo
-  tempo; abrir de novo só traz a janela existente para frente.
+  tempo; abrir de novo mostra a janela existente, mesmo escondida na bandeja.
 - **Zero troca de modo desnecessária.** Reenviar o modo Direct faz o
   controlador reinicializar a fita — uma piscada visível. Só é enviado quando
   o device ainda não está nele.
 - **Fechar minimiza.** A bandeja do sistema mantém o app rodando e os efeitos
-  animados; sair de verdade é uma opção explícita no menu dela.
+  animados; sair de verdade é uma opção explícita no menu dela. Iniciado com o
+  Windows, o app sobe direto na bandeja (`--bandeja`), sem abrir a janela.
 - **A janela abre na hora.** A conexão com o OpenRGB acontece numa thread à
   parte, então a interface aparece imediatamente mostrando "conectando" em vez
   de parecer travada por até vinte segundos na primeira execução.
@@ -210,10 +212,13 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
   [monsgeek-akko-linux](https://github.com/echtzeit-solutions/monsgeek-akko-linux),
   que reverteu essa mesma família de teclados.
 - **Temperaturas de CPU/GPU são opcionais.** Dependem de
-  `LibreHardwareMonitorLib.dll` em `vendor/` (não incluída — baixe em
-  [github.com/LibreHardwareMonitor/LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)).
+  `LibreHardwareMonitorLib.dll` (não incluída — baixe em
+  [github.com/LibreHardwareMonitor/LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)),
+  procurada em `vendor/` dentro da pasta de configuração, que no app instalado
+  é `%LOCALAPPDATA%\Spectra\vendor`, e depois em `vendor/` ao lado do código.
   Sem ela, os efeitos de sensor funcionam com uso de CPU/RAM via `psutil`, e
-  as temperaturas aparecem como indisponíveis — nunca inventadas.
+  as temperaturas aparecem como indisponíveis — nunca inventadas; a aba Fontes
+  e a vitrine dizem onde colocar o arquivo.
 - **RAM, SSD e GPU via SMBus/I²C exigem o OpenRGB elevado.** Sem privilégio
   administrativo o OpenRGB não abre o barramento (`Permission Denied, PawnIO
   initialization aborted` no log dele) e os pentes de memória simplesmente não
