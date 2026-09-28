@@ -24,7 +24,6 @@ CONCORRENTES = {
     "gigabytecontrolcenter": "GIGABYTE Control Center",
     "rgbfusion": "RGB Fusion",
     "gbt_rgb_sync_control": "GIGABYTE RGB Sync",
-    "deepcool": "DeepCool",
     "icue": "Corsair iCUE",
     "corsair.service": "Corsair iCUE",
     "mysticlight": "MSI Mystic Light",
@@ -41,6 +40,9 @@ CONCORRENTES = {
     "viper": "Patriot Viper RGB",
     "openrgb effects": "OpenRGB Effects",
 }
+
+# A DeepCool saiu da lista: o app dela e quem desenha o visor do water cooler,
+# e fechar ele a cada abertura do Spectra apagava a tela sem ganho nenhum.
 
 PROTEGIDOS = {"openrgb", "python", "pythonw"}
 

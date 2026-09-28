@@ -41,6 +41,12 @@ class TestVarredura:
                   11: r"C:\msys64\ucrt64\bin\gcc-ar.exe"})
         assert exclusive.scan() == []
 
+    def test_app_da_deepcool_fica_aberto(self, monkeypatch):
+        # e ele que desenha o visor do water cooler
+        _maquina(monkeypatch, [(30, "deepcool", "DeepCool.exe")],
+                 {30: r"C:\DeepCool\DeepCool.exe"})
+        assert exclusive.scan() == []
+
     def test_control_center_da_gigabyte_continua_na_lista(self, monkeypatch):
         _maquina(monkeypatch, [(20, "gcc", "GCC.exe")],
                  {20: r"C:\Program Files\GIGABYTE\Control Center\GCC.exe"})
