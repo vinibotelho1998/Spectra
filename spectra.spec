@@ -32,12 +32,13 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# onedir: o exe unico abria um processo pai que so desempacota e espera, e ele
+# tambem segurava o desligamento do Windows, dando dois avisos por vez
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="Spectra",
     debug=False,
     bootloader_ignore_signals=False,

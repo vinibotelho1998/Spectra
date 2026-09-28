@@ -20,14 +20,13 @@ Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue |
     Unregister-ScheduledTask -Confirm:$false
 
 $action    = New-ScheduledTaskAction -Execute $exe -Argument '--server --startminimized'
-$trigger   = New-ScheduledTaskTrigger -AtLogOn -User $id.Name
 $principal = New-ScheduledTaskPrincipal -UserId $id.Name -LogonType Interactive `
                                         -RunLevel Highest
 $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
                 -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
                 -StartWhenAvailable -MultipleInstances IgnoreNew
 
-Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger `
+Register-ScheduledTask -TaskName $name -Action $action `
     -Principal $principal -Settings $settings `
     -Description 'Servidor SDK do OpenRGB elevado, usado pelo Spectra.' | Out-Null
 
