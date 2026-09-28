@@ -346,7 +346,7 @@ class SpectraApp:
             return False
         return True
 
-    def ensure_openrgb(self, wait: float = 25.0) -> bool:
+    def ensure_openrgb(self, wait: float = 25.0, pode_subir: bool = True) -> bool:
         """Garante que o servidor OpenRGB esteja no ar, subindo se preciso.
 
         Sem privilegio de administrador o OpenRGB nao abre o SMBus, e sem
@@ -355,15 +355,33 @@ class SpectraApp:
 
         Quando nao consegue, deixa em `motivo_conexao` o porque, para a
         interface dizer a acao certa em vez de uma instrucao generica.
+
+        `pode_subir` falso e o vigia: ele reconecta num servidor que esta
+        abrindo, mas nao abre outro. Fechar o OpenRGB e escolha de quem fechou,
+        e o vigia reabria ele sem fim.
         """
+        from .core import admin
+
         if _port_open(self.host, self.port):
             return True
+        if admin.openrgb_rodando():
+            # O OpenRGB leva uns cinco segundos varrendo o hardware antes de
+            # abrir a porta. Quem subia outro nessa janela, como no logon com
+            # a tarefa antiga do Prism, deixava dois disputando os mesmos LEDs.
+            self.status_msg = "esperando o OpenRGB abrir a porta"
+            return self._esperar_porta(wait)
+        if not pode_subir:
+            self.motivo_conexao = "servidor_fechado"
+            return False
         if not self.config.get("autostart_openrgb"):
             self.motivo_conexao = "partida_desligada"
             return False
         self.status_msg = "subindo o servidor OpenRGB"
         if not self._start_openrgb():
             return False
+        return self._esperar_porta(wait)
+
+    def _esperar_porta(self, wait: float) -> bool:
         deadline = time.time() + wait
         while time.time() < deadline:
             if _port_open(self.host, self.port):
@@ -674,7 +692,7 @@ class SpectraApp:
             self.status_msg = "fechei: " + ", ".join(nomes)
         return r
 
-    def connect(self, exclusive_pass: bool = False) -> bool:
+    def connect(self, exclusive_pass: bool = False, pode_subir: bool = True) -> bool:
         """Conecta no servidor, carrega os dispositivos e monta o renderizador.
 
         Aplica as contagens de LED salvas antes de montar o canvas, senao o mapa
@@ -689,11 +707,11 @@ class SpectraApp:
         with self._conexao:
             self.connecting = True
             try:
-                return self._connect(exclusive_pass)
+                return self._connect(exclusive_pass, pode_subir)
             finally:
                 self.connecting = False
 
-    def _connect(self, exclusive_pass: bool) -> bool:
+    def _connect(self, exclusive_pass: bool, pode_subir: bool = True) -> bool:
         if exclusive_pass:
             try:
                 r = self.enforce_exclusive()
@@ -704,7 +722,7 @@ class SpectraApp:
                 self.last_error_exclusive = str(exc)
         self.motivo_conexao = None
         self.erro_conexao = None
-        aberto = self.ensure_openrgb()
+        aberto = self.ensure_openrgb(pode_subir=pode_subir)
         try:
             self.client.close()
             self.client.connect()
@@ -817,7 +835,7 @@ class SpectraApp:
             self.connected = False
             self.status_msg = "conexao com o OpenRGB caiu; reconectando"
             try:
-                ok = self.connect()
+                ok = self.connect(pode_subir=False)
             except Exception as exc:
                 # Erro fora do previsto nao pode matar o vigia: sem ele, a
                 # proxima queda do OpenRGB nunca mais seria reconectada.

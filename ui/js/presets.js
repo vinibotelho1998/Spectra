@@ -654,6 +654,8 @@ function renderSemConexao(box, st) {
     sem_resposta: `O OpenRGB foi aberto, mas o servidor nao respondeu na porta
       6742 a tempo. Confira se o SDK Server esta ligado nas configuracoes do
       OpenRGB e tente de novo.`,
+    servidor_fechado: `O OpenRGB foi fechado. O Spectra nao reabre ele sozinho;
+      clique em Tentar de novo para subir o servidor.`,
     falha_partida: `Nao consegui abrir o OpenRGB.`,
     recusada: `O servidor do OpenRGB nao aceitou a conexao. Confira se o SDK
       Server esta ligado nas configuracoes do OpenRGB, na porta 6742.`,

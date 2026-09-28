@@ -153,6 +153,11 @@ def _pids_openrgb() -> list:
     return pids
 
 
+def openrgb_rodando() -> bool:
+    """Diz se ja existe algum OpenRGB aberto, com a porta no ar ou nao."""
+    return bool(_pids_openrgb())
+
+
 def openrgb_elevado():
     """Diz se o servidor OpenRGB em execucao esta elevado.
 

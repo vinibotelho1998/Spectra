@@ -125,6 +125,7 @@ def _sem_nada_de_verdade(monkeypatch):
     for nome, valor in (("tarefa_existe", False), ("rodar_tarefa", False),
                         ("criar_tarefa", "recusado"), ("encerrar_openrgb", None),
                         ("sou_admin", False), ("openrgb_elevado", False),
+                        ("openrgb_rodando", False),
                         ("pawnio_instalado", False)):
         monkeypatch.setattr(admin, nome, lambda *a, _v=valor, **k: _v)
     try:
@@ -672,7 +673,8 @@ class TestTecladoAoVivo:
         t = com_teclado.teclado
         t.conectado = False
         com_teclado.renderer.ambiente = None
-        monkeypatch.setattr(com_teclado, "_connect", lambda exclusive_pass: True)
+        monkeypatch.setattr(com_teclado, "_connect",
+                            lambda exclusive_pass, pode_subir=True: True)
         com_teclado._watchdog_stop = ParadaDepoisDe(1)
         com_teclado._watchdog_loop()
         assert t.conectado is True
@@ -685,7 +687,7 @@ class TestConexao:
         dentro, maximo = [0], [0]
         conta = threading.Lock()
 
-        def falso(exclusive_pass):
+        def falso(exclusive_pass, pode_subir=True):
             with conta:
                 dentro[0] += 1
                 maximo[0] = max(maximo[0], dentro[0])
@@ -891,7 +893,7 @@ class TestVigia:
                                                              monkeypatch):
         tentativas = []
 
-        def quebra(exclusive_pass):
+        def quebra(exclusive_pass, pode_subir=True):
             tentativas.append(exclusive_pass)
             raise RuntimeError("falha inesperada")
 
@@ -967,7 +969,7 @@ def _reabre(monkeypatch, devices_fn):
     """
     b = app_mod.SpectraApp()
     b.client = FakeClient(devices_fn())
-    monkeypatch.setattr(b, "ensure_openrgb", lambda wait=25.0: True)
+    monkeypatch.setattr(b, "ensure_openrgb", lambda **_: True)
     monkeypatch.setattr(b, "check_elevacao", lambda: {})
     monkeypatch.setattr(b, "_liga_teclado", lambda: None)
     monkeypatch.setattr(b, "start_watchdog", lambda: None)
@@ -1048,7 +1050,8 @@ class TestCenaAoReabrir:
         spectra.update_layer(lid, {"params": {"speed": 0.6}})
         # o render desta bancada nunca subiu, entao o vigia tenta reconectar:
         # a conexao falsa impede que ele va atras de servidor e teclado
-        monkeypatch.setattr(spectra, "_connect", lambda exclusive_pass: True)
+        monkeypatch.setattr(spectra, "_connect",
+                            lambda exclusive_pass, pode_subir=True: True)
         spectra._watchdog_stop = ParadaDepoisDe(1)
         spectra._watchdog_loop()
         gravado = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
@@ -1347,7 +1350,7 @@ class TestMotivoDaConexao:
         assert spectra.motivo_conexao == "nao_instalado"
 
     def test_erro_do_windows_nao_vai_para_a_barra(self, spectra, monkeypatch):
-        monkeypatch.setattr(spectra, "ensure_openrgb", lambda wait=25.0: True)
+        monkeypatch.setattr(spectra, "ensure_openrgb", lambda **_: True)
 
         def recusa(timeout=4.0):
             raise ConnectionRefusedError(10061, "a maquina de destino as recusou")
@@ -1524,7 +1527,6 @@ class TestBandeja:
         t.ao_fechar_form(None, args)
         assert args.Cancel is True
         assert t.quitting is False
-
 
     def test_acender_volta_ao_brilho_de_antes(self, spectra):
         t = self._tray(spectra)
@@ -2013,6 +2015,44 @@ class TestEsperaDoServidor:
         assert spectra.ensure_openrgb(wait=30.0) is False
         assert sem_espera.esperas == []
 
+    def test_openrgb_abrindo_nao_ganha_um_segundo(self, spectra, monkeypatch,
+                                                  sem_espera):
+        # no logon a tarefa antiga ja tinha aberto um, que leva uns cinco
+        # segundos para abrir a porta; subir outro deixava os dois brigando
+        from spectra.core import admin
+        self._porta(monkeypatch, [False, False, True])
+        monkeypatch.setattr(admin, "openrgb_rodando", lambda: True)
+        monkeypatch.setattr(spectra, "_start_openrgb", lambda: pytest.fail(
+            "subiu outro OpenRGB com um abrindo"))
+        assert spectra.ensure_openrgb(wait=30.0) is True
+        assert sem_espera.esperas == [0.5]
+
+    def test_openrgb_abrindo_que_nunca_responde(self, spectra, monkeypatch):
+        from spectra.core import admin
+        self._porta(monkeypatch, [False])
+        monkeypatch.setattr(admin, "openrgb_rodando", lambda: True)
+        monkeypatch.setattr(spectra, "_start_openrgb", lambda: pytest.fail(
+            "subiu outro OpenRGB com um abrindo"))
+        assert spectra.ensure_openrgb(wait=0.0) is False
+        assert spectra.motivo_conexao == "sem_resposta"
+
+    def test_sem_poder_subir_nao_abre_o_openrgb(self, spectra, monkeypatch):
+        self._porta(monkeypatch, [False])
+        spectra.config["autostart_openrgb"] = True
+        monkeypatch.setattr(spectra, "_start_openrgb", lambda: pytest.fail(
+            "o vigia abriu o OpenRGB que a pessoa fechou"))
+        assert spectra.ensure_openrgb(pode_subir=False) is False
+        assert spectra.motivo_conexao == "servidor_fechado"
+
+    def test_abertura_do_app_ainda_sobe(self, spectra, monkeypatch, sem_espera):
+        self._porta(monkeypatch, [False, True])
+        spectra.config["autostart_openrgb"] = True
+        subidas = []
+        monkeypatch.setattr(spectra, "_start_openrgb",
+                            lambda: subidas.append(1) or True)
+        assert spectra.ensure_openrgb() is True
+        assert subidas == [1]
+
 
 class TestReparoDaElevacao:
 
@@ -2101,7 +2141,7 @@ def _app_novo(monkeypatch, devices):
     """Um segundo app sobre a mesma configuracao, sem nada de verdade."""
     b = app_mod.SpectraApp()
     b.client = FakeClient(devices)
-    monkeypatch.setattr(b, "ensure_openrgb", lambda wait=25.0: True)
+    monkeypatch.setattr(b, "ensure_openrgb", lambda **_: True)
     monkeypatch.setattr(b, "check_elevacao", lambda: {})
     monkeypatch.setattr(b, "_liga_teclado", lambda: None)
     monkeypatch.setattr(b, "start_watchdog", lambda: None)
@@ -2175,7 +2215,7 @@ class TestConexaoCompleta:
         r = spectra.renderer
         novo = FakeClient(_bancada())
         spectra.client = novo
-        for nome, valor in (("ensure_openrgb", lambda wait=25.0: True),
+        for nome, valor in (("ensure_openrgb", lambda **_: True),
                             ("check_elevacao", lambda: {}),
                             ("_liga_teclado", lambda: None),
                             ("start_watchdog", lambda: None)):
@@ -2202,7 +2242,7 @@ class TestConexaoCompleta:
 
     def test_motivo_de_antes_da_conexao_nao_e_trocado(self, spectra,
                                                       monkeypatch):
-        def sem_openrgb(wait=25.0):
+        def sem_openrgb(wait=25.0, pode_subir=True):
             spectra.motivo_conexao = "nao_instalado"
             return False
 
@@ -2977,7 +3017,8 @@ class TestVigiaDaConexao:
     def _sem_reconectar(self, spectra, monkeypatch):
         tentativas = []
         monkeypatch.setattr(spectra, "_connect",
-                            lambda exclusive_pass: tentativas.append(1) or True)
+                            lambda exclusive_pass, pode_subir=True:
+                            tentativas.append(1) or True)
         return tentativas
 
     def test_conexao_saudavel_nao_reconecta(self, spectra, monkeypatch):
@@ -3004,6 +3045,16 @@ class TestVigiaDaConexao:
         spectra._watchdog_loop()
         assert tentativas == []
         spectra._probe_session = None
+
+    def test_vigia_reconecta_sem_abrir_o_openrgb(self, spectra, monkeypatch):
+        pedidos = []
+        monkeypatch.setattr(spectra, "_connect",
+                            lambda exclusive_pass, pode_subir=True:
+                            pedidos.append(pode_subir) or False)
+        spectra.renderer.connection_lost = True
+        spectra._watchdog_stop = ParadaDepoisDe(2)
+        spectra._watchdog_loop()
+        assert pedidos == [False, False]
 
     def test_sem_motor_so_espera(self, spectra, monkeypatch):
         tentativas = self._sem_reconectar(spectra, monkeypatch)
