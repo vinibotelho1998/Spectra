@@ -90,6 +90,19 @@ class Tray:
         self._avisa_bandeja()
         return False
 
+    def ao_fechar_form(self, _sender, args) -> None:
+        """Libera o fechamento que vem do Windows encerrando a sessao.
+
+        Roda depois do tratador do pywebview, que ja passou por `ao_fechar` e
+        pode ter cancelado. O `sessao_encerrando` nao e garantido nessa hora:
+        quando falhava, a janela ia para a bandeja, o fechamento era cancelado
+        e o Windows mostrava o Spectra impedindo o desligamento.
+        """
+        if str(getattr(args, "CloseReason", "")) != "WindowsShutDown":
+            return
+        self.quitting = True
+        args.Cancel = False
+
     def _avisa_bandeja(self):
         """Na primeira vez que o X esconde a janela, diz onde o app foi parar.
 

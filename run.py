@@ -129,6 +129,20 @@ def connect_in_background(app: SpectraApp) -> None:
         print("[spectra] seguindo sem hardware; a UI sobe mesmo assim")
 
 
+def ligar_desligamento(window, tray) -> bool:
+    """Liga na janela nativa o tratador que deixa o Windows desligar.
+
+    Vem depois do tratador do pywebview na fila do evento, entao a decisao
+    dele e a que vale quando o motivo do fechamento e o desligamento.
+    """
+    try:
+        window.native.FormClosing += tray.ao_fechar_form
+    except Exception as exc:
+        print(f"[spectra] sem tratador de desligamento: {exc}")
+        return False
+    return True
+
+
 def run_window(url: str, app: SpectraApp, bandeja: bool = False) -> int:
     try:
         import webview
@@ -159,6 +173,7 @@ def run_window(url: str, app: SpectraApp, bandeja: bool = False) -> int:
     app.ao_mostrar_janela = tray._mostrar
 
     window.events.closing += tray.ao_fechar
+    window.events.before_show += lambda window: ligar_desligamento(window, tray)
     window.events.loaded += lambda: set_window_icon(TITULO)
 
     try:

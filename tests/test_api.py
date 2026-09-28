@@ -1507,6 +1507,25 @@ class TestBandeja:
         assert t.ao_fechar() is True
         assert t.window.escondida is False
 
+    def test_fechamento_do_desligamento_nao_e_cancelado(self, spectra,
+                                                        monkeypatch):
+        # o tratador do pywebview ja cancelou porque o X esconde na bandeja;
+        # o Windows perguntando se pode desligar tem que ouvir sim
+        monkeypatch.setattr(tray_mod, "sessao_encerrando", lambda: False)
+        t = self._tray(spectra)
+        args = types.SimpleNamespace(CloseReason="WindowsShutDown", Cancel=True)
+        t.ao_fechar_form(None, args)
+        assert args.Cancel is False
+        assert t.quitting is True
+
+    def test_x_da_janela_continua_indo_para_a_bandeja(self, spectra):
+        t = self._tray(spectra)
+        args = types.SimpleNamespace(CloseReason="UserClosing", Cancel=True)
+        t.ao_fechar_form(None, args)
+        assert args.Cancel is True
+        assert t.quitting is False
+
+
     def test_acender_volta_ao_brilho_de_antes(self, spectra):
         t = self._tray(spectra)
         spectra.update_settings({"brightness": 0.35})
