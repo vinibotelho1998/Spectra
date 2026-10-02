@@ -117,6 +117,14 @@ class TestRegistro:
         assert fx.get(IDS[0]) is not None
         assert fx.get("nao existe") is None
 
+    def test_listas_de_cores_padrao_sao_independentes(self):
+        for definition in fx.EFFECTS.values():
+            for param in definition.params:
+                if isinstance(param["default"], list):
+                    defaults = definition.defaults()
+                    defaults[param["name"]].append("#123456")
+                    assert definition.defaults()[param["name"]] == param["default"]
+
     def test_catalogo_cobre_todos_os_efeitos(self):
         total = sum(len(g["effects"]) for g in fx.catalog())
         assert total == fx.count()

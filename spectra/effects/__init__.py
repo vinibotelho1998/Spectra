@@ -5,7 +5,7 @@ Importar o pacote registra todos os efeitos dos modulos filhos em
 completo.
 """
 
-from . import (basic, cable, flow, noisefx, particles,
+from . import (ambient, basic, cable, flow, noisefx, particles,
                pixel, reactive, sim, waves)
 from .base import EFFECTS, catalog, effect, get
 

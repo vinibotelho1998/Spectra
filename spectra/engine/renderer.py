@@ -16,6 +16,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+from copy import deepcopy
 
 import numpy as np
 
@@ -48,7 +49,7 @@ class Layer:
                  id: str | None = None):
         self.id = id or uuid.uuid4().hex[:8]
         self.effect_id = effect_id
-        self.params = dict(params or {})
+        self.params = deepcopy(params or {})
         self.blend = blend_mode
         self.opacity = float(opacity)
         self.enabled = bool(enabled)
@@ -249,11 +250,15 @@ class Renderer:
                 continue
             try:
                 top = d.fn(ctx, layer.resolved_params(), layer.state)
+                # Converter tambem pode falhar (ex.: lista irregular ou texto).
+                # Inf precisa virar cor limitada antes do blend: o maior
+                # float32 estoura quando duas camadas sao multiplicadas.
+                top = np.nan_to_num(np.asarray(top, dtype=np.float32),
+                                    nan=0.0, posinf=1.0, neginf=0.0)
             except Exception as exc:
                 self.last_error = f"{layer.effect_id}: {exc}"
                 layer.enabled = False
                 continue
-            top = np.nan_to_num(np.asarray(top, dtype=np.float32), nan=0.0)
             if top.shape != (n, 3):
                 continue
             mask = layer.mask_for(self.canvas)

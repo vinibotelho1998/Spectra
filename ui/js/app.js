@@ -5,22 +5,52 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
 const API = {
-  async get(p) {
-    const r = await fetch(p, { cache: "no-store" });
-    if (!r.ok) throw new Error(`${p}: ${r.status}`);
-    return r.json();
+  async request(p, options = {}) {
+    try {
+      const r = await fetch(p, { cache: "no-store", ...options });
+      const data = r.status === 204 ? {} : await r.json().catch(() => null);
+      if (!r.ok) throw new Error((data && data.error) ||
+        `O servidor nao concluiu a operacao (HTTP ${r.status}). Tente novamente.`);
+      if (data === null) throw new Error("O servidor devolveu uma resposta invalida. Tente novamente.");
+      if (options.method === "POST" && data.error) throw new Error(data.error);
+      return data;
+    } catch (cause) {
+      const error = cause instanceof TypeError
+        ? new Error("Sem resposta do servidor local. Confira se o Spectra esta aberto.")
+        : cause;
+      error.isApiError = true;
+      throw error;
+    }
   },
-  async post(p, body) {
-    const r = await fetch(p, {
+  get(p) { return this.request(p); },
+  post(p, body) {
+    return this.request(p, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body || {}),
     });
-    const j = await r.json().catch(() => ({}));
-    if (j && j.error) throw new Error(j.error);
-    return j;
   },
 };
+
+// Os controles antigos que nao tratam sua Promise tambem precisam informar
+// falhas de rede. Erros de programacao continuam visiveis no console.
+window.addEventListener("unhandledrejection", (event) => {
+  if (!event.reason || !event.reason.isApiError) return;
+  event.preventDefault();
+  toast(event.reason.message, true);
+});
+
+/** Escritas da mesma familia seguem a ordem dos gestos, mesmo com rede lenta. */
+const writeQueues = new Map();
+function orderedPost(key, path, body) {
+  const payload = JSON.parse(JSON.stringify(body || {}));
+  const previous = writeQueues.get(key) || Promise.resolve();
+  const next = previous.catch(() => {}).then(() => API.post(path, payload));
+  writeQueues.set(key, next);
+  const cleanup = () => { if (writeQueues.get(key) === next) writeQueues.delete(key); };
+  next.then(cleanup, cleanup);
+  return next;
+}
 
 const S = {
   catalog: null,
@@ -44,23 +74,38 @@ const S = {
  *  ultimo valor de cada janela precisa virar pedido para o servidor. */
 function throttle(fn, ms) {
   let t = null, last = null;
-  return (...a) => {
+  const invoke = () => {
+    t = null;
+    const args = last;
+    last = null;
+    return fn(...args);
+  };
+  const throttled = (...a) => {
     last = a;
     if (t) return;
-    t = setTimeout(() => { t = null; fn(...last); }, ms);
+    t = setTimeout(invoke, ms);
   };
+  throttled.cancel = () => { clearTimeout(t); t = null; last = null; };
+  throttled.flush = () => { if (t) { clearTimeout(t); return invoke(); } };
+  return throttled;
 }
 
 let toastTimer = null;
 function toast(msg, isErr, action) {
   const el = $("#toast");
+  el.setAttribute("role", isErr ? "alert" : "status");
+  el.setAttribute("aria-live", isErr ? "assertive" : "polite");
+  el.setAttribute("aria-atomic", "true");
   el.innerHTML = "";
   el.appendChild(document.createTextNode(msg));
   if (action) {
     const b = document.createElement("button");
     b.className = "act";
     b.textContent = action.label;
-    b.addEventListener("click", () => { el.hidden = true; action.run(); });
+    b.addEventListener("click", () => {
+      el.hidden = true;
+      Promise.resolve().then(action.run).catch((e) => toast(e.message, true));
+    });
     el.appendChild(b);
   }
   el.classList.toggle("err", !!isErr);
@@ -109,9 +154,13 @@ function guardaRascunhoLeds(chave, atual, valor) {
 function showTab(name) {
   const btn = $(`.navbtn[data-tab="${name}"]`);
   if (!btn) return;
-  $$(".navbtn").forEach((x) => x.classList.remove("active"));
+  $$(".navbtn").forEach((x) => {
+    x.classList.remove("active");
+    x.removeAttribute("aria-current");
+  });
   $$(".tab").forEach((x) => x.classList.remove("active"));
   btn.classList.add("active");
+  btn.setAttribute("aria-current", "page");
   $("#tab-" + name).classList.add("active");
   if (name === "effects") {
     renderPresets(); renderAvisoExclusivo(); renderSetupBanner(); renderNowPlaying();
@@ -130,6 +179,53 @@ function activeTab() {
 
 $$(".navbtn").forEach((b) =>
   b.addEventListener("click", () => showTab(b.dataset.tab)));
+
+$$(".navbtn").forEach((b) => {
+  b.setAttribute("aria-controls", "tab-" + b.dataset.tab);
+  if (b.classList.contains("active")) b.setAttribute("aria-current", "page");
+  b.addEventListener("keydown", (e) => {
+    const tabs = $$(".navbtn");
+    let index = tabs.indexOf(b);
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") index = (index + 1) % tabs.length;
+    else if (e.key === "ArrowUp" || e.key === "ArrowLeft") index = (index + tabs.length - 1) % tabs.length;
+    else if (e.key === "Home") index = 0;
+    else if (e.key === "End") index = tabs.length - 1;
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+    showTab(tabs[index].dataset.tab);
+    tabs[index].focus();
+  });
+});
+
+const dialogFocus = new WeakMap();
+function openModal(id, initialFocus) {
+  const modal = $(id);
+  dialogFocus.set(modal, document.activeElement);
+  modal.hidden = false;
+  document.body.classList.add("modal-open");
+  const card = $(".modal-card", modal);
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  card.tabIndex = -1;
+  const title = $("h2", card);
+  if (title) {
+    title.id = title.id || modal.id + "Title";
+    modal.setAttribute("aria-labelledby", title.id);
+  }
+  (initialFocus || $("button:not(:disabled), input:not(:disabled)", card) || card).focus();
+}
+
+function closeModal(id) {
+  const modal = $(id);
+  modal.hidden = true;
+  if (!$$(".modal").some((item) => !item.hidden)) document.body.classList.remove("modal-open");
+  const target = dialogFocus.get(modal);
+  if (target && target.isConnected) target.focus();
+  dialogFocus.delete(modal);
+}
+
+function activeModal() { return $$(".modal").find((modal) => !modal.hidden); }
 
 $("#status").addEventListener("click", () => showTab("devices"));
 
@@ -344,18 +440,26 @@ function startPolling() {
 }
 
 function setFps(v) {
-  S.fps = v;
-  $("#fpsVal").textContent = v != null ? v.toFixed(0) : "—";
+  S.fps = Number.isFinite(v) ? v : null;
+  $("#fpsVal").textContent = S.fps != null ? S.fps.toFixed(0) : "—";
 }
 
+let stateRequest = 0, stateApplied = 0;
 async function refreshState() {
+  const request = ++stateRequest;
   let st;
   try {
     st = await API.get("/api/state");
   } catch (e) {
-    setStatus("err", "servidor local fora do ar");
+    if (request >= stateApplied) {
+      stateApplied = request;
+      setStatus("err", "servidor local fora do ar");
+    }
     return;
   }
+  // Uma resposta antiga nao pode desfazer o estado de um pedido mais novo.
+  if (request < stateApplied) return;
+  stateApplied = request;
   const before = S.state;
   S.state = st;
   S.positions = (st.canvas && st.canvas.positions) || [];
@@ -381,8 +485,11 @@ async function refreshState() {
     power.classList.toggle("on", b > 0);
     power.classList.toggle("off", b === 0);
     power.title = b === 0 ? "Acender os LEDs" : "Apagar os LEDs";
+    power.setAttribute("aria-label", power.title);
+    power.setAttribute("aria-pressed", String(b > 0));
     $("#btnPause").textContent = st.settings.paused ? "Retomar" : "Pausar";
     $("#btnPause").classList.toggle("primary", !!st.settings.paused);
+    $("#btnPause").setAttribute("aria-pressed", String(!!st.settings.paused));
   }
 
   renderLayers();
@@ -401,7 +508,7 @@ async function refreshState() {
     if (fontesSig(st) !== ultimoFontesSig && !digitandoEm($("#sourcesBody"))) renderSources();
   }
   if (tab === "layout") renderZoneChips();
-  if (tab === "settings" && settingsNeedsRedraw(before, st)) renderSettings();
+  if (tab === "settings" && settingsNeedsRedraw(before, st) && !digitandoEm($("#settingsBody"))) renderSettings();
 
   // conectou depois da janela abrir: a vitrine e o mapa mudam de vez
   if (before && !before.connected && st.connected) {
@@ -456,10 +563,11 @@ function renderCanvasVazio(el, st, compacto) {
 }
 
 async function reconectar(btn) {
-  if (btn) btn.classList.add("busy");
+  if (btn && btn.disabled) return;
+  if (btn) { btn.classList.add("busy"); btn.disabled = true; }
   setStatus("busy", "reconectando…");
   try { await API.post("/api/reconnect"); } catch (e) { toast(e.message, true); }
-  if (btn) btn.classList.remove("busy");
+  if (btn) { btn.classList.remove("busy"); btn.disabled = false; }
   refreshState();
 }
 
@@ -467,7 +575,7 @@ function settingsNeedsRedraw(a, b) {
   if (!a) return true;
   const k = (s) => JSON.stringify([s.connected, s.connecting, s.reconnects,
                                    s.last_error, s.exclusive_mode,
-                                   s.autostart_openrgb, s.protocol]);
+                                   s.autostart_openrgb, s.protocol, s.settings]);
   return k(a) !== k(b);
 }
 
@@ -523,6 +631,8 @@ function renderLayers(force) {
     li.className = "layer" + (L.id === S.selected ? " selected" : "") + (L.enabled ? "" : " off");
     li.draggable = true;
     li.dataset.id = L.id;
+    li.tabIndex = 0;
+    li.setAttribute("aria-label", `${L.name || (d ? d.label : L.effect)}. Enter para editar; Alt e setas para reordenar.`);
     const scope = L.targets && L.targets.length ? `${L.targets.length} alvo(s)` : "tudo";
     li.innerHTML =
       `<span class="grip" title="Arraste para reordenar">${ICON_GRIP}</span>` +
@@ -530,9 +640,32 @@ function renderLayers(force) {
       `<div class="layer-name">${esc(L.name || (d ? d.label : L.effect))}</div>` +
       `<div class="layer-sub">${esc(d ? d.label : L.effect)} · ${esc(blendLabel(L.blend))} · ${Math.round(L.opacity * 100)}% · ${scope}</div>` +
       `</div>` +
-      `<button class="dup" title="Duplicar">${ICON_COPY}</button>` +
-      `<button class="eye" title="${L.enabled ? "Desligar" : "Ligar"}">${L.enabled ? ICON_EYE : ICON_EYE_OFF}</button>` +
-      `<button class="del" title="Remover">${ICON_X}</button>`;
+      `<button class="dup" title="Duplicar" aria-label="Duplicar camada">${ICON_COPY}</button>` +
+      `<button class="eye" title="${L.enabled ? "Desligar" : "Ligar"}" aria-label="${L.enabled ? "Desligar" : "Ligar"} camada" aria-pressed="${!!L.enabled}">${L.enabled ? ICON_EYE : ICON_EYE_OFF}</button>` +
+      `<button class="del" title="Remover" aria-label="Remover camada">${ICON_X}</button>`;
+
+    li.addEventListener("keydown", async (e) => {
+      if (e.target !== li) return;
+      if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        e.preventDefault();
+        const order = layers.map((layer) => layer.id);
+        const from = order.indexOf(L.id);
+        const to = from + (e.key === "ArrowUp" ? 1 : -1);
+        if (to < 0 || to >= order.length) return;
+        [order[from], order[to]] = [order[to], order[from]];
+        await orderedPost("layers", "/api/layer/reorder", { order });
+        layersSig = null;
+        await refreshState();
+        $$("#layerList .layer").find((item) => item.dataset.id === L.id)?.focus();
+      } else if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        S.selected = L.id;
+        renderLayers();
+        renderParams();
+        $("#paramsBody input, #paramsBody select, #paramsBody button")?.focus();
+      }
+    });
 
     li.addEventListener("click", (e) => {
       if (e.target.closest("button")) return;
@@ -635,14 +768,45 @@ function currentLayer() {
   return ((S.state && S.state.layers) || []).find((l) => l.id === S.selected) || null;
 }
 
-async function patchLayer(patch) {
-  const L = currentLayer();
+async function patchLayer(patch, id = S.selected) {
+  const L = ((S.state && S.state.layers) || []).find((layer) => layer.id === id);
   if (!L) return;
-  Object.assign(L, patch.params ? { params: { ...L.params, ...patch.params } } : patch);
-  await API.post("/api/layer/update", { id: L.id, patch });
+  Object.assign(L, patch, patch.params ? { params: { ...L.params, ...patch.params } } : {});
+  try {
+    await orderedPost("layer:" + id, "/api/layer/update", { id, patch });
+  } catch (e) {
+    toast(e.message, true);
+    await refreshState();
+    if (S.selected === id) renderParams();
+  }
 }
 
-const patchLayerSoon = throttle((patch) => patchLayer(patch), 40);
+// Captura a camada no gesto. Um unico throttle descartava parametros e
+// podia mandar o ultimo valor para outra camada selecionada logo depois.
+const pendingLayerPatches = new Map();
+function patchLayerSoon(patch, id = S.selected) {
+  if (!id) return;
+  let pending = pendingLayerPatches.get(id);
+  if (!pending) {
+    pending = { patch: {}, timer: null };
+    pendingLayerPatches.set(id, pending);
+    pending.timer = setTimeout(() => {
+      pendingLayerPatches.delete(id);
+      patchLayer(pending.patch, id);
+    }, 40);
+  }
+  pending.patch = { ...pending.patch, ...patch,
+    ...((pending.patch.params || patch.params)
+      ? { params: { ...pending.patch.params, ...patch.params } } : {}) };
+}
+
+function flushLayerPatch(id) {
+  const pending = pendingLayerPatches.get(id);
+  if (!pending) return Promise.resolve();
+  clearTimeout(pending.timer);
+  pendingLayerPatches.delete(id);
+  return patchLayer(pending.patch, id);
+}
 
 /* ----------------------------------------------------------- parametros */
 
@@ -683,13 +847,13 @@ function renderParams() {
     }
   }
 
-  body.appendChild(field("Nome", inputText(L.name || "", (v) => patchLayer({ name: v }))));
+  body.appendChild(field("Nome", inputText(L.name || "", (v) => patchLayer({ name: v }, L.id))));
   body.appendChild(
-    field("Mistura", selectEl(S.catalog.blends, L.blend, (v) => { patchLayer({ blend: v }); renderLayers(); }))
+    field("Mistura", selectEl(S.catalog.blends, L.blend, (v) => { patchLayer({ blend: v }, L.id); renderLayers(); }))
   );
   body.appendChild(
     sliderField("Opacidade", L.opacity, 0, 1, 0.01,
-      (v) => { patchLayerSoon({ opacity: v }); },
+      (v) => { patchLayerSoon({ opacity: v }, L.id); },
       (v) => Math.round(v * 100) + "%")
   );
 
@@ -708,8 +872,9 @@ function renderParams() {
   const toggleTarget = (tag, btn) => {
     const t = new Set(L.targets);
     t.has(tag) ? t.delete(tag) : t.add(tag);
-    patchLayer({ targets: [...t] });
+    patchLayer({ targets: [...t] }, L.id);
     btn.classList.toggle("on", t.has(tag));
+    btn.setAttribute("aria-pressed", String(t.has(tag)));
     setVal();
     renderLayers();
   };
@@ -733,7 +898,7 @@ function renderParams() {
   body.appendChild(sep);
 
   for (const q of d.params) {
-    const el = paramControl(q, L, (v) => patchLayerSoon({ params: { [q.name]: v } }));
+    const el = paramControl(q, L, (v) => patchLayerSoon({ params: { [q.name]: v } }, L.id));
     if (el) body.appendChild(el);
   }
 }
@@ -760,11 +925,22 @@ function paramControl(q, L, set, compact) {
   return null;
 }
 
+let fieldNumber = 0;
 function field(label, control) {
   const w = document.createElement("div");
   w.className = "field";
   const l = document.createElement("label");
   l.textContent = label;
+  const input = control.matches("input, select, textarea") ? control
+    : control.querySelector("input, select, textarea");
+  if (input) {
+    input.id = input.id || "field-" + (++fieldNumber);
+    l.htmlFor = input.id;
+  } else {
+    l.id = "field-label-" + (++fieldNumber);
+    control.setAttribute("role", "group");
+    control.setAttribute("aria-labelledby", l.id);
+  }
   w.appendChild(l);
   w.appendChild(control);
   return w;
@@ -780,10 +956,14 @@ function sliderField(label, value, min, max, step, onChange, fmt) {
   l.append(document.createTextNode(label), val);
   const inp = document.createElement("input");
   inp.type = "range";
+  inp.id = "field-" + (++fieldNumber);
+  l.htmlFor = inp.id;
+  inp.setAttribute("aria-valuetext", String(val.textContent));
   inp.min = min; inp.max = max; inp.step = step; inp.value = value;
   inp.addEventListener("input", () => {
     const v = parseFloat(inp.value);
     val.textContent = fmt ? fmt(v) : v;
+    inp.setAttribute("aria-valuetext", String(val.textContent));
     onChange(v);
   });
   w.append(l, inp);
@@ -814,11 +994,18 @@ function colorList(values, onChange) {
     values.forEach((c, i) => {
       const inp = document.createElement("input");
       inp.type = "color";
+      inp.setAttribute("aria-label", `Cor ${i + 1}. Delete remove a cor.`);
       inp.value = c;
       inp.addEventListener("input", () => { values[i] = inp.value; onChange([...values]); });
       inp.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         if (values.length > 1) { values.splice(i, 1); onChange([...values]); rebuild(); }
+      });
+      inp.addEventListener("keydown", (e) => {
+        if (e.key !== "Delete" || values.length <= 1) return;
+        e.preventDefault();
+        values.splice(i, 1); onChange([...values]); rebuild();
+        wrap.querySelector("input")?.focus();
       });
       inp.title = "Botao direito remove";
       wrap.appendChild(inp);
@@ -827,6 +1014,7 @@ function colorList(values, onChange) {
     add.className = "mini";
     add.textContent = "+";
     add.title = "Adicionar cor";
+    add.setAttribute("aria-label", "Adicionar cor");
     add.addEventListener("click", () => { values.push("#ffffff"); onChange([...values]); rebuild(); });
     wrap.appendChild(add);
   };
@@ -905,6 +1093,7 @@ function chipToggle(label, on) {
   const b = document.createElement("button");
   b.className = "target-chip" + (on ? " on" : "");
   b.textContent = label;
+  b.setAttribute("aria-pressed", String(!!on));
   return b;
 }
 
@@ -917,17 +1106,19 @@ $("#btnResetParams").addEventListener("click", async () => {
   const L = currentLayer();
   const d = L && effectDef(L.effect);
   if (!d) return;
+  await flushLayerPatch(L.id);
   const antes = { ...L.params };
   const padroes = {};
   for (const q of d.params)
     padroes[q.name] = Array.isArray(q.default) ? [...q.default] : q.default;
-  await API.post("/api/layer/update", { id: L.id, patch: { params: padroes } });
+  await orderedPost("layer:" + L.id, "/api/layer/update", { id: L.id, patch: { params: padroes } });
   await refreshState();
   renderParams();
   toast("Parametros de volta ao padrao", false, {
     label: "Desfazer",
     run: async () => {
-      await API.post("/api/layer/update", { id: L.id, patch: { params: antes } });
+      await flushLayerPatch(L.id);
+      await orderedPost("layer:" + L.id, "/api/layer/update", { id: L.id, patch: { params: antes } });
       await refreshState();
       renderParams();
     },
@@ -937,11 +1128,11 @@ $("#btnResetParams").addEventListener("click", async () => {
 /* ------------------------------------------------- seletor de efeitos */
 
 function openEffectPicker(target) {
+  if (!S.catalog) return toast("O catalogo ainda esta carregando. Tente novamente em instantes.", true);
   S.effectPickTarget = target;
   $("#effectSearch").value = "";
   buildEffectGrid("");
-  $("#effectModal").hidden = false;
-  $("#effectSearch").focus();
+  openModal("#effectModal", $("#effectSearch"));
 }
 
 function buildEffectGrid(q) {
@@ -979,7 +1170,7 @@ function buildEffectGrid(q) {
 }
 
 async function pickEffect(id) {
-  $("#effectModal").hidden = true;
+  closeModal("#effectModal");
   try {
     if (S.effectPickTarget === "new") {
       const L = await API.post("/api/layer/add", { effect: id });
@@ -991,8 +1182,9 @@ async function pickEffect(id) {
     // trocar o efeito zera os parametros: o desfazer devolve os de antes
     const alvo = S.effectPickTarget;
     const L = ((S.state && S.state.layers) || []).find((l) => l.id === alvo);
+    await flushLayerPatch(alvo);
     const antes = L ? { effect: L.effect, params: { ...L.params }, name: L.name } : null;
-    await API.post("/api/layer/update", { id: alvo, patch: { effect: id } });
+    await orderedPost("layer:" + alvo, "/api/layer/update", { id: alvo, patch: { effect: id } });
     await refreshState();
     renderParams();
     const d = effectDef(id);
@@ -1000,7 +1192,8 @@ async function pickEffect(id) {
       label: "Desfazer",
       run: async () => {
         try {
-          await API.post("/api/layer/update", { id: alvo, patch: antes });
+          await flushLayerPatch(alvo);
+          await orderedPost("layer:" + alvo, "/api/layer/update", { id: alvo, patch: antes });
           await refreshState();
           renderParams();
         } catch (e) { toast(e.message, true); }
@@ -1014,15 +1207,16 @@ async function pickEffect(id) {
 $("#presetSearch").addEventListener("input", (e) => renderPresets(e.target.value));
 $("#btnAddLayer").addEventListener("click", () => openEffectPicker("new"));
 $("#btnChangeEffect").addEventListener("click", () => S.selected && openEffectPicker(S.selected));
-$("#btnCloseModal").addEventListener("click", () => ($("#effectModal").hidden = true));
+$("#btnCloseModal").addEventListener("click", () => closeModal("#effectModal"));
 $("#effectSearch").addEventListener("input", (e) => buildEffectGrid(e.target.value));
 $("#effectSearch").addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
+  e.preventDefault();
   const first = $("#effectGrid .fx");
   if (first) first.click();
 });
 $("#effectModal").addEventListener("click", (e) => {
-  if (e.target.id === "effectModal") $("#effectModal").hidden = true;
+  if (e.target.id === "effectModal") closeModal("#effectModal");
 });
 
 /* --------------------------------------------------------------- layout */
@@ -2039,7 +2233,7 @@ function renderProfiles() {
       }
       await API.post("/api/profile/delete", { name });
       toast(`Perfil "${name}" excluido`);
-      refreshState();
+      await refreshState();
       renderProfiles();
     });
     li.append(load, del);
@@ -2057,6 +2251,7 @@ $("#profileName").addEventListener("input", desarmaSalvar);
 // A conferencia e do servidor, pelo nome ja limpo: "Jogo!" vira "Jogo", e
 // comparando o texto cru a interface sobrescrevia dizendo que era novo.
 let salvarArmado = null, salvarTimer = null;
+let savingProfile = false;
 function desarmaSalvar() {
   salvarArmado = null;
   clearTimeout(salvarTimer);
@@ -2066,10 +2261,14 @@ function desarmaSalvar() {
 }
 
 async function saveProfile() {
+  if (savingProfile) return;
   const inp = $("#profileName");
   const name = inp.value.trim();
   if (!name) return toast("Digite um nome para o perfil", true);
   const confirmado = salvarArmado === name;
+  savingProfile = true;
+  const saveButton = $("#btnSaveProfile");
+  saveButton.disabled = true;
   try {
     const r = await API.post("/api/profile/save", { name, sobrescrever: confirmado });
     if (r.existe) {
@@ -2090,11 +2289,12 @@ async function saveProfile() {
       renderProfiles();
     } else toast(r.error, true);
   } catch (e) { desarmaSalvar(); toast(e.message, true); }
+  finally { savingProfile = false; saveButton.disabled = false; }
 }
 
 /* ------------------------------------------------------ controles do topo */
 
-const sendBright = throttle((v) => API.post("/api/settings", { brightness: v / 100 }), 60);
+const sendBright = throttle((v) => orderedPost("settings", "/api/settings", { brightness: v / 100 }), 60);
 $("#brightness").addEventListener("input", (e) => {
   const v = parseInt(e.target.value, 10);
   $("#brightVal").textContent = v + "%";
@@ -2105,32 +2305,44 @@ $("#brightness").addEventListener("input", (e) => {
 });
 
 $("#btnPower").addEventListener("click", async () => {
+  sendBright.cancel();
   const cur = parseInt($("#brightness").value, 10);
   const alvo = cur > 0 ? 0 : (S.prevBright || 100);
   $("#brightness").value = alvo;
   $("#brightVal").textContent = alvo + "%";
   $("#btnPower").classList.toggle("on", alvo > 0);
   $("#btnPower").classList.toggle("off", alvo === 0);
-  await API.post("/api/settings", { brightness: alvo / 100 });
-  toast(alvo === 0 ? "LEDs apagados" : `Brilho em ${alvo}%`);
+  try {
+    await orderedPost("settings", "/api/settings", { brightness: alvo / 100 });
+    toast(alvo === 0 ? "LEDs apagados" : `Brilho em ${alvo}%`);
+  } catch (e) { toast(e.message, true); }
+  await refreshState();
 });
 
 $("#btnPause").addEventListener("click", togglePause);
 
+let togglingPause = false;
 async function togglePause() {
+  if (togglingPause) return;
+  togglingPause = true;
   const paused = !(S.state && S.state.settings && S.state.settings.paused);
-  await API.post("/api/settings", { paused });
-  toast(paused ? "Efeitos pausados, LEDs congelados" : "Efeitos retomados");
-  refreshState();
+  try {
+    await orderedPost("settings", "/api/settings", { paused });
+    toast(paused ? "Efeitos pausados, LEDs congelados" : "Efeitos retomados");
+    await refreshState();
+  } catch (e) { toast(e.message, true); }
+  finally { togglingPause = false; }
 }
 
 $("#btnGlow").addEventListener("click", (e) => {
   S.glow = !S.glow;
   e.currentTarget.dataset.on = S.glow ? "1" : "0";
+  e.currentTarget.setAttribute("aria-pressed", String(S.glow));
 });
 $("#btnLabels").addEventListener("click", (e) => {
   S.labels = !S.labels;
   e.currentTarget.dataset.on = S.labels ? "1" : "0";
+  e.currentTarget.setAttribute("aria-pressed", String(S.labels));
 });
 
 /* ------------------------------------------------------ atalhos globais */
@@ -2141,20 +2353,46 @@ function typing(el) {
 }
 
 document.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented || e.isComposing) return;
+  const modal = activeModal();
+  if (modal) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (modal.id === "probeModal") sairDoAssistente();
+      else closeModal("#" + modal.id);
+    } else if (e.key === "Tab") {
+      const focusable = $$("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex='0']", modal)
+        .filter((el) => !el.hidden && el.getClientRects().length);
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (!first) { e.preventDefault(); $(".modal-card", modal).focus(); }
+      else if (e.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+        e.preventDefault(); first.focus();
+      }
+    }
+    return;
+  }
   if (e.key === "Escape") {
-    $("#effectModal").hidden = true;
+    if (document.activeElement === $("#presetSearch") && $("#presetSearch").value) {
+      $("#presetSearch").value = "";
+      renderPresets();
+    }
     return;
   }
   if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key >= "1" && e.key <= "7") {
     const tabs = ["effects", "scene", "layout", "devices", "sources", "profiles", "settings"];
     showTab(tabs[+e.key - 1]);
+    $(`.navbtn[data-tab="${tabs[+e.key - 1]}"]`).focus();
     e.preventDefault();
     return;
   }
   if (typing(document.activeElement)) return;
-  if (!$("#effectModal").hidden || !$("#probeModal").hidden) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
 
-  if (e.key === " ") { e.preventDefault(); togglePause(); return; }
+  if (e.key === " " && !document.activeElement?.closest("button, a, [role='button']")) {
+    e.preventDefault(); togglePause(); return;
+  }
   if (e.key === "/") {
     e.preventDefault();
     showTab("effects");

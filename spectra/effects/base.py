@@ -13,7 +13,8 @@ quando a camada troca de efeito.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass
 from typing import Callable
 
 EFFECTS: dict[str, "EffectDef"] = {}
@@ -37,7 +38,7 @@ class EffectDef:
 
     def defaults(self) -> dict:
         """Dicionario com o valor padrao de cada parametro."""
-        return {q["name"]: q["default"] for q in self.params}
+        return {q["name"]: deepcopy(q["default"]) for q in self.params}
 
     def to_json(self) -> dict:
         """Descreve o efeito no formato que a interface consome."""

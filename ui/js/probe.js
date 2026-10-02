@@ -29,7 +29,7 @@ function defaultInventory() {
  *  comecam nela e o assistente abre direto na conferencia: antes o botao
  *  de conferir zerava tudo e refazia a busca inteira do zero. */
 async function startWizard(list, opcoes) {
-  if (W.busy) return;
+  if (W.busy || !$("#probeModal").hidden) return;
   W.busy = true;
   const conferir = !!(opcoes && opcoes.conferir);
   try {
@@ -71,8 +71,8 @@ async function startWizard(list, opcoes) {
     W._assignIdx = 0;
     W._splitIdx = 0;
     W.step = conferir ? (pending().length ? 1 : 2) : 0;
-    $("#probeModal").hidden = false;
     renderStep();
+    openModal("#probeModal", $("#probeBody input, #probeBody button"));
     if (W.step === 1) paintRound();
   } catch (e) {
     toast(e.message, true);
@@ -119,14 +119,21 @@ function loadInventory() {
 function saveInventory() {
   const itens = W.inventory.map((it) => ({ ...it }));
   if (S.state) S.state.inventario = itens;
-  API.post("/api/inventario", { itens }).catch(() => {});
+  orderedPost("inventory", "/api/inventario", { itens }).catch((e) => toast(e.message, true));
 }
 
 async function closeWizard(apply) {
-  $("#probeModal").hidden = true;
+  if (W.busy) return;
+  W.busy = true;
+  const cancel = $("#probeCancel");
+  cancel.disabled = true;
   try {
     await API.post("/api/probe/finish", {});
-  } catch (e) {}
+    closeModal("#probeModal");
+  } catch (e) {
+    toast(`${e.message} O assistente continua aberto; tente sair novamente.`, true);
+    return;
+  } finally { W.busy = false; cancel.disabled = false; }
   await refreshState();
   renderSetupBanner();
   renderPresets();
@@ -140,13 +147,14 @@ const STEPS = ["Inventario", "Contagem", "Conferencia", "Atribuicao",
 
 function renderStepper() {
   $("#probeStepper").innerHTML = STEPS.map((s, i) =>
-    `<span class="stp${i === W.step ? " on" : ""}${i < W.step ? " done" : ""}">
+    `<span class="stp${i === W.step ? " on" : ""}${i < W.step ? " done" : ""}"${i === W.step ? ' aria-current="step"' : ""}>
        <b>${i + 1}</b>${esc(s)}</span>`).join("");
 }
 
 function renderStep() {
   renderStepper();
   const b = $("#probeBody");
+  const restoreFocus = b.contains(document.activeElement);
   b.innerHTML = "";
   if (W.step === 0) stepInventory(b);
   else if (W.step === 1) stepCount(b);
@@ -154,6 +162,7 @@ function renderStep() {
   else if (W.step === 3) stepAssign(b);
   else if (W.step === 4) stepSplit(b);
   else stepApply(b);
+  if (restoreFocus) $("input:not([hidden]), select, button:not(:disabled)", b)?.focus();
 }
 
 function nav(box, backLabel, back, nextLabel, next, nextDisabled) {
@@ -198,18 +207,18 @@ function stepInventory(box) {
     const row = document.createElement("div");
     row.className = "inv-row";
     row.innerHTML = `
-      <input class="inv-label" type="text" value="${esc(it.label)}">
-      <select class="inv-kind">
+      <input class="inv-label" type="text" value="${esc(it.label)}" aria-label="Nome da peca ${i + 1}">
+      <select class="inv-kind" aria-label="Tipo da peca ${i + 1}">
         <option value="fan"${it.kind === "fan" ? " selected" : ""}>Fan (anel)</option>
         <option value="strip"${it.kind === "strip" ? " selected" : ""}>Fita (linha)</option>
         <option value="cable"${it.kind === "cable" ? " selected" : ""}>Fita de cabo (laminas)</option>
       </select>
-      <input class="inv-pieces" type="number" min="1" max="24" value="${it.pieces}" title="Quantas pecas">
+      <input class="inv-pieces" type="number" min="1" max="24" value="${it.pieces}" title="Quantas pecas" aria-label="Quantidade de pecas">
       <input class="inv-lanes" type="number" min="2" max="48" value="${it.lanes || 12}"
-             title="Quantas laminas paralelas" ${it.kind === "cable" ? "" : "hidden"}>
-      <select class="inv-spot">${spots.map((s) =>
+             title="Quantas laminas paralelas" aria-label="Quantidade de laminas paralelas" ${it.kind === "cable" ? "" : "hidden"}>
+      <select class="inv-spot" aria-label="Posicao no gabinete">${spots.map((s) =>
         `<option value="${s.value}"${s.value === it.spot ? " selected" : ""}>${esc(s.label)}</option>`).join("")}</select>
-      <button class="inv-del" title="Remover">&times;</button>`;
+      <button class="inv-del" title="Remover" aria-label="Remover ${esc(it.label)}">&times;</button>`;
     row.querySelector(".inv-label").addEventListener("change", (e) => { it.label = e.target.value; saveInventory(); });
     row.querySelector(".inv-kind").addEventListener("change", (e) => {
       it.kind = e.target.value;
@@ -218,10 +227,12 @@ function stepInventory(box) {
       renderStep();
     });
     row.querySelector(".inv-lanes").addEventListener("change", (e) => {
-      it.lanes = Math.max(2, parseInt(e.target.value, 10) || 12); saveInventory();
+      it.lanes = clamp(parseInt(e.target.value, 10) || 12, 2, 48);
+      e.target.value = it.lanes; saveInventory();
     });
     row.querySelector(".inv-pieces").addEventListener("change", (e) => {
-      it.pieces = Math.max(1, parseInt(e.target.value, 10) || 1); saveInventory();
+      it.pieces = clamp(parseInt(e.target.value, 10) || 1, 1, 24);
+      e.target.value = it.pieces; saveInventory();
     });
     row.querySelector(".inv-spot").addEventListener("change", (e) => { it.spot = e.target.value; saveInventory(); });
     row.querySelector(".inv-del").addEventListener("click", () => {
@@ -632,7 +643,12 @@ function stepApply(box) {
  *  Antes o botao ficava travado em "Aplicando", e repetir nao funcionaria,
  *  porque depois de fechar a sondagem as contagens ja nao tem para onde ir. */
 async function applyAll() {
+  if (W.busy) return;
+  W.busy = true;
   const btn = $("#probeBody .probe-actions .primary");
+  const back = $("#probeBody .probe-actions .btn:not(.primary)");
+  if (back) back.disabled = true;
+  $("#probeCancel").disabled = true;
   if (btn) { btn.disabled = true; btn.textContent = "Aplicando…"; }
   const feito = W.aplicado || (W.aplicado = { commits: false, finish: false, mapas: new Set() });
   try {
@@ -671,7 +687,7 @@ async function applyAll() {
       feito.mapas.add(zoneKey(z));
     }
     W.aplicado = null;
-    $("#probeModal").hidden = true;
+    closeModal("#probeModal");
     toast(`Configurado: ${W.zones.filter((z) => z.count)
       .map((z) => `${z.name} = ${z.count}`).join(", ")}`);
   } catch (e) {
@@ -680,6 +696,10 @@ async function applyAll() {
       : "As contagens foram gravadas, mas o mapa de algum conector nao foi montado.";
     toast(`${e.message}. ${falta}`, true);
     if (btn) { btn.disabled = false; btn.textContent = "Tentar de novo"; }
+    if (back) back.disabled = feito.finish;
+  } finally {
+    W.busy = false;
+    $("#probeCancel").disabled = false;
   }
   await refreshState();
   renderSetupBanner();
@@ -690,7 +710,8 @@ async function applyAll() {
 }
 
 function sairDoAssistente() {
-  if (W.step > 0 && !confirm(
+  if (W.busy) return;
+  if (W.step > 0 && !(W.aplicado && W.aplicado.finish) && !confirm(
       "Sair do assistente? As contagens descobertas ate aqui sao descartadas.")) {
     return;
   }

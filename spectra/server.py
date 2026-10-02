@@ -7,6 +7,7 @@ escuta so em 127.0.0.1, entao nada disso fica exposto na rede.
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import os
 import threading
@@ -21,6 +22,15 @@ UI_DIR = os.path.join(ROOT, "ui")
 ASSETS_DIR = os.path.join(ROOT, "assets")
 
 HOSTS_LOCAIS = {"127.0.0.1", "localhost", "[::1]"}
+MAX_BODY_BYTES = 2 * 1024 * 1024
+
+
+class PedidoInvalido(ValueError):
+    """Erro de entrada que deve voltar como resposta HTTP, sem mudar o app."""
+
+    def __init__(self, mensagem, code=400):
+        super().__init__(mensagem)
+        self.code = code
 
 # Rotas que mexem na cena ou no hardware e so fazem sentido com o
 # renderizador de pe. Antes da primeira conexao elas estouravam com
@@ -66,6 +76,12 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "Spectra"
     app: SpectraApp = None
 
+    def setup(self):
+        super().setup()
+        # Um corpo anunciado que nunca chega nao deve manter uma thread
+        # do servidor presa para sempre.
+        self.connection.settimeout(15.0)
+
     def log_message(self, fmt, *args):
         """Silencia o log por pedido, que so poluiria o console."""
         pass
@@ -75,10 +91,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if getattr(self, "close_connection", False):
+            self.send_header("Connection", "close")
         self.end_headers()
         try:
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionAbortedError):
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             pass
 
     def _json(self, obj, code=200):
@@ -86,13 +105,47 @@ class Handler(BaseHTTPRequestHandler):
                                     default=str).encode("utf-8"))
 
     def _body(self) -> dict:
-        n = int(self.headers.get("Content-Length") or 0)
+        """Le um objeto JSON limitado; entrada ilegivel nunca vira acao vazia."""
+        if self.headers.get("Transfer-Encoding"):
+            raise PedidoInvalido("codificacao do corpo nao suportada")
+        if (hasattr(self.headers, "get_all")
+                and len(self.headers.get_all("Content-Length", [])) > 1):
+            raise PedidoInvalido("tamanho do corpo ambiguo")
+        tamanho = self.headers.get("Content-Length", "0").strip()
+        if not tamanho or not tamanho.isascii() or not tamanho.isdecimal():
+            raise PedidoInvalido("tamanho do corpo invalido")
+        # Limitar antes do int tambem evita inteiros com milhares de digitos.
+        if len(tamanho) > 10:
+            raise PedidoInvalido("pedido grande demais", 413)
+        n = int(tamanho)
+        if n > MAX_BODY_BYTES:
+            raise PedidoInvalido("pedido grande demais", 413)
         if not n:
             return {}
+
+        def rejeita_constante(valor):
+            raise ValueError(f"numero invalido: {valor}")
+
+        def numero_finito(valor):
+            numero = float(valor)
+            if not math.isfinite(numero):
+                raise ValueError("numero fora do intervalo suportado")
+            return numero
+
         try:
-            return json.loads(self.rfile.read(n).decode("utf-8"))
-        except Exception:
-            return {}
+            dados = self.rfile.read(n)
+            if len(dados) != n:
+                raise PedidoInvalido("corpo do pedido incompleto")
+            corpo = json.loads(dados.decode("utf-8"),
+                               parse_constant=rejeita_constante,
+                               parse_float=numero_finito)
+        except TimeoutError as exc:
+            raise PedidoInvalido("tempo esgotado ao receber o pedido", 408) from exc
+        except (ValueError, UnicodeError, RecursionError) as exc:
+            raise PedidoInvalido("corpo JSON invalido") from exc
+        if not isinstance(corpo, dict):
+            raise PedidoInvalido("o corpo JSON precisa ser um objeto")
+        return corpo
 
     def _foreign(self) -> bool:
         """Diz se o pedido veio de uma pagina de outra origem.
@@ -110,7 +163,7 @@ class Handler(BaseHTTPRequestHandler):
             if origin.split("://", 1)[-1].rstrip("/") != host:
                 return True
         ctype = (self.headers.get("Content-Type") or "").lower()
-        return "application/json" not in ctype
+        return ctype.split(";", 1)[0].strip() != "application/json"
 
     def _stream(self):
         """Empurra o quadro atual por Server-Sent Events, a ate 30 por segundo.
@@ -205,12 +258,14 @@ class Handler(BaseHTTPRequestHandler):
         p = self.path.split("?", 1)[0]
         a = self.app
         if self._foreign():
+            self.close_connection = True
             return self._json({"error": "origem nao permitida"}, 403)
         if p in PRECISA_MOTOR and a.renderer is None:
+            self.close_connection = True
             return self._json({"error": "ainda sem conexao com o OpenRGB: "
                                         "nenhum LED esta sob controle"}, 503)
-        b = self._body()
         try:
+            b = self._body()
             if p == "/api/layers":
                 a.set_layers(b.get("layers", []),
                              b["preset"] if "preset" in b else "keep",
@@ -313,8 +368,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             else:
                 return self._json({"error": "rota desconhecida"}, 404)
+        except PedidoInvalido as exc:
+            # Pode haver bytes sem ler. Fechar evita que sejam interpretados
+            # como o proximo pedido na conexao persistente do navegador.
+            self.close_connection = True
+            return self._json({"error": str(exc)}, exc.code)
         except KeyError as exc:
             return self._json({"error": f"parametro faltando: {exc}"}, 400)
+        except (TypeError, ValueError, OverflowError) as exc:
+            return self._json({"error": f"parametro invalido: {exc}"}, 400)
         except Exception as exc:
             # o nome da excecao nao diz nada a quem usa; o motivo, as vezes diz
             return self._json({"error": f"Nao consegui concluir: {exc}"}, 500)
@@ -323,7 +385,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve(app: SpectraApp, host="127.0.0.1", port=7311):
     """Sobe o servidor numa thread e devolve o endereco da interface."""
-    Handler.app = app
-    httpd = ThreadingHTTPServer((host, port), Handler)
+    # Cada servidor guarda seu app: abrir outro para testes ou depuracao nao
+    # pode redirecionar as rotas do primeiro para a segunda instancia.
+    handler = type("SpectraHandler", (Handler,), {"app": app})
+    httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True
     return httpd

@@ -2,6 +2,7 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # dados do usuario (gerados em tempo de execucao, nunca no repo)
 config/

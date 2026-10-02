@@ -124,6 +124,7 @@ def _sem_nada_de_verdade(monkeypatch):
     monkeypatch.setattr(app_mod, "_port_open", lambda *a, **k: False)
     for nome, valor in (("tarefa_existe", False), ("rodar_tarefa", False),
                         ("criar_tarefa", "recusado"), ("encerrar_openrgb", None),
+                        ("encerrar_tarefa", False),
                         ("sou_admin", False), ("openrgb_elevado", False),
                         ("openrgb_rodando", False),
                         ("pawnio_instalado", False)):
@@ -2150,6 +2151,23 @@ def _app_novo(monkeypatch, devices):
 
 class TestConexaoCompleta:
 
+    @pytest.mark.parametrize("reconexao", [False, True])
+    def test_elevacao_conta_a_ram_da_lista_recem_carregada(
+            self, spectra, monkeypatch, reconexao):
+        devices = _bancada()
+        devices[1].type = 1
+        b = _app_novo(monkeypatch, devices)
+        if reconexao:
+            antigos = _bancada()
+            b.renderer = Renderer(b.client, antigos)
+        monkeypatch.setattr(b, "check_elevacao", lambda: (
+            app_mod.SpectraApp.check_elevacao(b)))
+        try:
+            assert b.connect() is True
+            assert b.elevacao["dram"] == 1
+        finally:
+            b.renderer.stop()
+
     def test_contagem_salva_vale_antes_de_montar_o_mapa(self, spectra, tmp_path,
                                                         monkeypatch, sem_espera):
         mobo, ram = (d["key"] for d in spectra.state()["devices"])
@@ -2745,12 +2763,12 @@ class TestMapaDeRotas:
         assert code == 400
         assert body["error"] == "parametro faltando: 'id'"
 
-    def test_corpo_que_nao_e_json_vira_vazio(self):
-        app = AppQueAnota()
+    def test_corpo_que_nao_e_json_e_recusado(self):
         h = Handler.__new__(Handler)
         h.headers = {"Content-Length": "5"}
         h.rfile = io.BytesIO(b"{oops")
-        assert Handler._body(h) == {}
+        with pytest.raises(server_mod.PedidoInvalido, match="JSON invalido"):
+            Handler._body(h)
         h.headers = {}
         assert Handler._body(h) == {}
 
@@ -3251,3 +3269,180 @@ class TestFontesNoEstado:
     def test_nome_de_perfil_que_nao_e_texto(self, spectra, nome):
         assert spectra.load_profile(nome) is False
         assert spectra.delete_profile(nome) is False
+
+
+class TestRecuperacaoNaAbertura:
+    """O logon pode encontrar um SDK atrasado, vazio ou travado."""
+
+    def test_primeira_falha_mantem_o_vigia_tentando(self, spectra, monkeypatch):
+        b = _app_novo(monkeypatch, _bancada())
+        iniciados = []
+        monkeypatch.setattr(b, "start_watchdog", lambda: iniciados.append(1))
+
+        def recusa():
+            raise ConnectionRefusedError("SDK ainda nao abriu")
+
+        monkeypatch.setattr(b.client, "connect", recusa)
+        assert b.connect() is False
+        assert b.renderer is None and b._primeira_conexao_pendente
+        assert iniciados == [1]
+
+        pedidos = []
+        monkeypatch.setattr(b, "connect", lambda **kw: pedidos.append(kw) or False)
+        b._watchdog_stop = ParadaDepoisDe(3)
+        b._watchdog_loop()
+        assert pedidos == [{"pode_subir": True}] * 3
+
+    def test_lista_vazia_nao_vira_conexao_saudavel(self, spectra, monkeypatch,
+                                                   sem_espera):
+        b = _app_novo(monkeypatch, [])
+        assert b.connect() is False
+        assert b.renderer is None
+        assert b.connected is False
+        assert b._primeira_conexao_pendente is True
+        assert "nao encontrou dispositivos" in b.erro_conexao
+        # Quando a deteccao termina, a proxima tentativa monta a cena.
+        b.client.devices = _bancada()
+        try:
+            assert b.connect() is True
+            assert b.renderer.canvas.n == 15
+            assert b._primeira_conexao_pendente is False
+        finally:
+            b.renderer.stop()
+
+    def _servidor_travado(self, spectra, monkeypatch, tmp_path):
+        from spectra.core import admin
+        b = _app_novo(monkeypatch, _bancada())
+        b.config["openrgb_exe"] = _exe_openrgb(tmp_path)
+        rodando = [True]
+        chamadas = []
+        monkeypatch.setattr(admin, "openrgb_rodando", lambda: rodando[0])
+
+        def encerra():
+            chamadas.append("encerrar")
+            rodando[0] = False
+            return True
+
+        monkeypatch.setattr(admin, "encerrar_openrgb", encerra)
+        monkeypatch.setattr(b, "_start_openrgb",
+                            lambda: chamadas.append("iniciar") or True)
+        monkeypatch.setattr(b, "_esperar_porta", lambda wait: True)
+        return b, rodando, chamadas
+
+    def test_sdk_travado_reinicia_uma_vez_e_restaura_a_cena(
+            self, spectra, monkeypatch, tmp_path):
+        b, rodando, chamadas = self._servidor_travado(spectra, monkeypatch, tmp_path)
+
+        def conecta():
+            chamadas.append("conectar")
+            if rodando[0]:
+                raise OpenRGBError("SDK sem resposta")
+
+        monkeypatch.setattr(b.client, "connect", conecta)
+        try:
+            assert b.connect() is True
+            assert chamadas == ["conectar", "encerrar", "iniciar", "conectar"]
+            assert b.renderer.canvas.n == 15
+            assert b._recuperacao_inicial_tentada is True
+        finally:
+            b.renderer.stop()
+
+    def test_instancia_que_nao_abriu_a_porta_tambem_e_recuperada(
+            self, spectra, monkeypatch, tmp_path):
+        b, rodando, chamadas = self._servidor_travado(spectra, monkeypatch, tmp_path)
+        monkeypatch.setattr(b, "ensure_openrgb", lambda **kw: False)
+        monkeypatch.setattr(b.client, "connect", lambda: (
+            (_ for _ in ()).throw(ConnectionRefusedError("sem SDK"))
+            if rodando[0] else None))
+        try:
+            assert b.connect() is True
+            assert chamadas == ["encerrar", "iniciar"]
+        finally:
+            b.renderer.stop()
+
+    def test_segunda_falha_nao_reinicia_sem_fim(self, spectra, monkeypatch,
+                                               tmp_path):
+        b, rodando, chamadas = self._servidor_travado(spectra, monkeypatch, tmp_path)
+
+        def recusa():
+            raise OpenRGBError("ainda indisponivel")
+
+        monkeypatch.setattr(b.client, "connect", recusa)
+        assert b.connect() is False
+        rodando[0] = True
+        assert b.connect() is False
+        assert chamadas == ["encerrar", "iniciar"]
+
+    @pytest.mark.parametrize("mudanca", ["remoto", "outra_porta", "manual",
+                                          "sem_exe", "ja_conectado"])
+    def test_recuperacao_respeita_o_escopo_local(self, spectra, monkeypatch,
+                                                tmp_path, mudanca):
+        b, _, chamadas = self._servidor_travado(spectra, monkeypatch, tmp_path)
+        if mudanca == "remoto":
+            b.host = "192.0.2.1"
+        elif mudanca == "outra_porta":
+            b.port = 7777
+        elif mudanca == "manual":
+            b.config["autostart_openrgb"] = False
+        elif mudanca == "sem_exe":
+            b.config.pop("openrgb_exe")
+        elif mudanca == "ja_conectado":
+            b.renderer = spectra.renderer
+        assert b._recuperar_openrgb_inicial(True) is False
+        assert chamadas == []
+
+    def test_recusa_ao_fechar_nao_abre_segundo_processo(self, spectra,
+                                                       monkeypatch, tmp_path):
+        from spectra.core import admin
+        b, _, chamadas = self._servidor_travado(spectra, monkeypatch, tmp_path)
+        monkeypatch.setattr(admin, "encerrar_openrgb", lambda: False)
+        assert b._recuperar_openrgb_inicial(True) is False
+        assert chamadas == []
+
+    def test_processo_que_demora_a_sair_nao_ganha_duplicata(self, spectra,
+                                                          monkeypatch, tmp_path):
+        from spectra.core import admin
+        b, _, chamadas = self._servidor_travado(spectra, monkeypatch, tmp_path)
+        monkeypatch.setattr(admin, "encerrar_openrgb", lambda: True)
+        tempos = iter([0.0, 11.0])
+        monkeypatch.setattr(app_mod, "time", types.SimpleNamespace(
+            monotonic=lambda: next(tempos)))
+        assert b._recuperar_openrgb_inicial(True) is False
+        assert chamadas == []
+
+    def test_servidor_elevado_pode_ser_encerrado_pela_propria_tarefa(
+            self, spectra, monkeypatch, tmp_path):
+        from spectra.core import admin
+        b, rodando, chamadas = self._servidor_travado(spectra, monkeypatch, tmp_path)
+        monkeypatch.setattr(admin, "encerrar_openrgb", lambda: False)
+        monkeypatch.setattr(admin, "tarefa_existe", lambda nome: True)
+
+        def encerra_tarefa(nome):
+            chamadas.append(("encerrar_tarefa", nome))
+            rodando[0] = False
+            return True
+
+        monkeypatch.setattr(admin, "encerrar_tarefa", encerra_tarefa)
+        assert b._recuperar_openrgb_inicial(True) is True
+        assert chamadas == [("encerrar_tarefa", app_mod.OPENRGB_TASK), "iniciar"]
+
+    def test_reconexao_para_o_render_antes_de_trocar_o_socket(self, spectra,
+                                                             monkeypatch):
+        r = spectra.renderer
+        r.start()
+        observados = []
+        monkeypatch.setattr(spectra, "ensure_openrgb", lambda **kw: True)
+        monkeypatch.setattr(spectra, "start_watchdog", lambda: None)
+        monkeypatch.setattr(spectra, "_liga_teclado", lambda: None)
+        monkeypatch.setattr(spectra.client, "connect", lambda: observados.append(
+            r._thread.is_alive()))
+        assert spectra.connect() is True
+        assert observados == [False]
+
+    def test_encerramento_nao_reabre_vigia_nem_servidor(self, spectra, monkeypatch):
+        b = _app_novo(monkeypatch, _bancada())
+        b._encerrando = True
+        monkeypatch.setattr(b, "_connect", lambda *a: pytest.fail("reconectou"))
+        assert b.connect() is False
+        app_mod.SpectraApp.start_watchdog(b)
+        assert b._watchdog is None

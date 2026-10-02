@@ -10,6 +10,8 @@ de refinados por serem cansativas em uso prolongado.
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 
 def L(effect, params=None, blend="normal", opacity=1.0, name="", targets=None):
     """Monta uma camada de preset, com efeito, parametros e composicao."""
@@ -41,10 +43,60 @@ class Preset:
 
     def scene(self):
         """Devolve as camadas no formato que o renderizador carrega."""
-        return {"layers": self.layers}
+        return {"layers": deepcopy(self.layers)}
 
 
 PRESETS = [
+    Preset("seda", "Seda", "Ambiente",
+           "Dobras em violeta e rosa com reflexos lentos de tecido acetinado.",
+           ["#2d00f7", "#8900f2", "#f20089", "#01c5c4"],
+           [L("silk", {"speed": 0.16, "intensity": 0.8}, name="Seda")]),
+
+    Preset("prisma", "Prisma", "Movimento",
+           "Tres feixes de cor se cruzam enquanto giram pelo gabinete.",
+           ["#ff0000", "#ffff00", "#00ffff", "#0000ff"],
+           [L("prism", {"speed": 0.12, "intensity": 0.75}, name="Prisma")]),
+
+    Preset("dunas", "Dunas", "Ambiente",
+           "Cristas de areia em tons do por do sol, com luz e sombra suaves.",
+           ["#12043a", "#c22e63", "#ff6b35", "#ffc15e"],
+           [L("dunes", {"speed": 0.14, "intensity": 0.8}, name="Dunas")]),
+
+    Preset("eclipse", "Eclipse", "Cenario",
+           "Uma sombra atravessa o halo dourado de um sol no escuro.",
+           ["#000000", "#a01a00", "#ffb400", "#ffe89a"],
+           [L("eclipse", {"speed": 0.18, "intensity": 0.75}, name="Eclipse")]),
+
+    Preset("lotus", "Lotus", "Movimento",
+           "Petalas luminosas se abrem em roxo e ciano ao redor do centro.",
+           ["#0d0221", "#7b2cbf", "#e0218a", "#00f5d4"],
+           [L("lotus", {"speed": 0.15, "intensity": 0.85}, name="Lotus")]),
+
+    Preset("lissajous", "Lissajous", "Movimento",
+           "Um fio neon forma lacos entrelacados que mudam continuamente.",
+           ["#ff006e", "#fb5607", "#8338ec", "#3a86ff"],
+           [L("lissajous", {"speed": 0.22, "intensity": 0.8}, name="Lissajous")]),
+
+    Preset("trama", "Trama", "Ambiente",
+           "Fios em tons de gelo se cruzam como um tecido iluminado.",
+           ["#000814", "#0055a4", "#00a6fb", "#8ae1ff"],
+           [L("woven", {"speed": 0.12, "intensity": 0.8}, name="Trama")]),
+
+    Preset("mare", "Mare", "Ambiente",
+           "Agua azul avanca e recua com uma linha discreta de espuma.",
+           ["#03045e", "#0077b6", "#48cae4", "#caf0f8"],
+           [L("tidal", {"speed": 0.16, "intensity": 0.8}, name="Mare")]),
+
+    Preset("helice", "Helice", "Fluxo",
+           "Dois fios se trancam ao longo de cada fan e fita, com defasagem.",
+           ["#26034f", "#7b2cbf", "#e0218a", "#00f5d4"],
+           [L("helix", {"speed": 0.2, "intensity": 0.85}, name="Helice")]),
+
+    Preset("constelacao", "Constelacao", "Cenario",
+           "Estrelas flutuam devagar, ligadas por fios finos de luz azul.",
+           ["#000814", "#0055a4", "#8ae1ff", "#ffffff"],
+           [L("constellation", {"speed": 0.1, "intensity": 0.8}, name="Estrelas")]),
+
     Preset("cabo_cross", "Cross Over", "Cabo",
            "Dois feixes diagonais atravessando o cabo em sentidos opostos e se "
            "cruzando no meio. O efeito que mais mostra a largura da fita.",

@@ -21,7 +21,7 @@
             stroke-width="1.1" opacity=".55"/>
     </svg>
     <span>SPECTRA</span>
-    <span class="versao" id="versao" title="Versao do Spectra">v{{versao}}</span>
+    <span class="versao" id="versao" title="Versão do Spectra">v{{versao}}</span>
   </div>
 
   <button class="status" id="status" title="Abrir a aba Hardware">
@@ -43,18 +43,18 @@
     <button class="iconbtn on" id="btnPower" title="Apagar ou acender os LEDs" aria-label="Apagar ou acender os LEDs">
       <svg viewBox="0 0 24 24" class="ic"><path d="M12 3v9"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/></svg>
     </button>
-    <button class="btn ghost" id="btnPause" title="Pausar os efeitos, com os LEDs congelados (Espaco)">Pausar</button>
+    <button class="btn ghost" id="btnPause" title="Pausar os efeitos, com os LEDs congelados (Espaço)">Pausar</button>
   </div>
 </header>
 
 <div class="shell">
-  <nav class="sidenav">
+  <nav class="sidenav" aria-label="Navegação principal">
     <button class="navbtn active" data-tab="effects" title="Efeitos (Ctrl+1)">
       <svg viewBox="0 0 24 24" class="ic"><path d="M12 2.5l2.6 6.2 6.7.5-5.1 4.4 1.6 6.6-5.8-3.5-5.8 3.5 1.6-6.6L2.7 9.2l6.7-.5z"/></svg>
       <span>Efeitos</span><span class="kbd">1</span></button>
-    <button class="navbtn" data-tab="scene" title="Avancado (Ctrl+2)">
+    <button class="navbtn" data-tab="scene" title="Avançado (Ctrl+2)">
       <svg viewBox="0 0 24 24" class="ic"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
-      <span>Avancado</span><span class="kbd">2</span></button>
+      <span>Avançado</span><span class="kbd">2</span></button>
     <button class="navbtn" data-tab="layout" title="Layout (Ctrl+3)">
       <svg viewBox="0 0 24 24" class="ic"><rect x="3" y="3" width="7" height="7" rx="1.5"/>
         <rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>
@@ -78,16 +78,23 @@
       <span>Ajustes</span><span class="kbd">7</span></button>
   </nav>
 
-  <main class="content">
+  <main class="content" id="mainContent">
 
     <!-- ========================== EFEITOS =========================== -->
     <section class="tab active" id="tab-effects">
+      <div class="page-heading">
+        <div><span class="eyebrow">SEU SETUP, SUA LUZ</span>
+          <h1>Estúdio de iluminação</h1>
+          <p>Escolha uma cena. Ajuste as cores. Deixe do seu jeito.</p>
+        </div>
+        <span class="catalog-count" id="presetCount" aria-live="polite"></span>
+      </div>
       <div id="avisoExclusivo"></div>
       <div id="setupBanner"></div>
 
       <div class="quickbar">
-        <span class="lb">Cor unica</span>
-        <input type="color" id="quickColor" value="#00d9ff" title="Todos os LEDs numa cor so">
+        <label class="lb" for="quickColor">Cor única</label>
+        <input type="color" id="quickColor" value="#00d9ff" title="Todos os LEDs numa cor só">
         <div class="swatches" id="quickSwatches"></div>
         <span class="grow"></span>
         <button class="btn sm" id="btnShuffle" title="Aplica um efeito pronto ao acaso">Surpreenda-me</button>
@@ -98,7 +105,7 @@
           <div class="panel-head">
             <h2>Efeitos prontos</h2>
             <div class="head-actions">
-              <input type="search" id="presetSearch" placeholder="Buscar efeito…  /" autocomplete="off">
+              <input type="search" id="presetSearch" placeholder="Buscar efeito…  /" aria-label="Buscar efeitos prontos" autocomplete="off">
             </div>
             <div class="chiprow" id="presetChips"></div>
           </div>
@@ -108,7 +115,7 @@
         <div class="panel fx-side">
           <div class="panel-head"><h2>Tocando agora</h2></div>
           <div class="canvas-wrap mini">
-            <canvas id="preview2"></canvas>
+            <canvas id="preview2" role="img" aria-label="Prévia das cores nos dispositivos"></canvas>
             <div class="canvas-empty" id="canvasEmpty2" hidden></div>
           </div>
           <div id="nowPlaying" class="now-playing">
@@ -124,14 +131,14 @@
 
         <div class="panel preview-panel">
           <div class="panel-head">
-            <h2>Pre-visualizacao</h2>
+            <h2>Pré-visualização</h2>
             <div class="head-actions">
               <button class="chip" id="btnGlow" data-on="1" title="So na pre-visualizacao, nao muda os LEDs">Halo</button>
-              <button class="chip" id="btnLabels">Rotulos</button>
+              <button class="chip" id="btnLabels">Rótulos</button>
             </div>
           </div>
           <div class="canvas-wrap">
-            <canvas id="preview"></canvas>
+            <canvas id="preview" role="img" aria-label="Prévia da composição de camadas"></canvas>
             <div class="canvas-empty" id="canvasEmpty" hidden></div>
           </div>
         </div>
@@ -149,12 +156,12 @@
 
         <div class="panel params-panel">
           <div class="panel-head">
-            <h2 id="paramsTitle">Parametros</h2>
+            <h2 id="paramsTitle">Parâmetros</h2>
           </div>
           <div class="params-actions" id="paramsActions" hidden>
             <button class="btn ghost sm" id="btnChangeEffect">Trocar efeito</button>
             <button class="btn ghost sm" id="btnDupLayer" title="Cria uma copia desta camada">Duplicar</button>
-            <button class="btn ghost sm" id="btnResetParams" title="Volta os parametros do efeito ao padrao">Restaurar padrao</button>
+            <button class="btn ghost sm" id="btnResetParams" title="Volta os parametros do efeito ao padrao">Restaurar padrão</button>
           </div>
           <div id="paramsBody" class="params-body">
             <p class="muted center">Selecione uma camada.</p>
@@ -169,22 +176,22 @@
       <div class="layout-grid">
         <div class="panel">
           <div class="panel-head">
-            <h2>Mapa fisico</h2>
+            <h2>Mapa físico</h2>
             <div class="head-actions">
               <button class="chip" id="btnLiveLayout" data-on="1" title="Mostra as cores do efeito atual no mapa">Ao vivo</button>
-              <button class="btn ghost sm" id="btnResetLayout" title="Apaga o mapa salvo e volta ao posicionamento automatico">Voltar ao automatico</button>
+              <button class="btn ghost sm" id="btnResetLayout" title="Apaga o mapa salvo e volta ao posicionamento automático">Voltar ao automático</button>
             </div>
           </div>
           <p class="hint" style="margin:0 0 10px">
             Posicione cada zona onde ela fica de verdade no gabinete: os efeitos
-            usam essas coordenadas. Arraste para mover, use as alcas para girar
+            usam essas coordenadas. Arraste para mover, use as alças para girar
             e redimensionar, ou as setas do teclado para ajustes finos.
             <b>Piscar</b> acende so a zona selecionada no gabinete, para achar
-            qual peca e qual.
+            qual peça é qual.
           </p>
           <div class="chiprow zone-chips" id="zoneChips"></div>
           <div class="canvas-wrap edit">
-            <canvas id="layoutCanvas"></canvas>
+            <canvas id="layoutCanvas" tabindex="0" aria-label="Mapa dos LEDs. Selecione uma zona e use as setas para mover."></canvas>
             <div class="canvas-empty" id="layoutEmpty" hidden></div>
           </div>
         </div>
@@ -224,7 +231,7 @@
           Spectra abre. Um perfil guarda uma cena inteira, com camadas, parametros
           e brilho, para alternar entre elas.</p>
         <div class="profile-save">
-          <input type="text" id="profileName" placeholder="Nome do perfil" maxlength="40">
+          <input type="text" id="profileName" placeholder="Nome do perfil" aria-label="Nome do perfil" maxlength="40">
           <button class="btn primary" id="btnSaveProfile">Salvar cena atual</button>
         </div>
         <ul class="profile-list" id="profileList"></ul>
@@ -240,11 +247,11 @@
 </div>
 
 <!-- ====================== SELETOR DE EFEITOS ====================== -->
-<div class="modal" id="effectModal" hidden>
+<div class="modal" id="effectModal" role="dialog" aria-modal="true" aria-labelledby="effectModalTitle" tabindex="-1" hidden>
   <div class="modal-card">
     <div class="modal-head">
-      <h2>Escolher efeito</h2>
-      <input type="search" id="effectSearch" placeholder="Buscar… (Enter escolhe o primeiro)" autocomplete="off">
+      <h2 id="effectModalTitle">Escolher efeito</h2>
+      <input type="search" id="effectSearch" placeholder="Buscar… (Enter escolhe o primeiro)" aria-label="Buscar na biblioteca de efeitos" autocomplete="off">
       <button class="btn ghost sm" id="btnCloseModal">Fechar</button>
     </div>
     <div class="modal-body" id="effectGrid"></div>
@@ -252,7 +259,7 @@
 </div>
 
 <!-- ====================== ASSISTENTE DE LEDS ====================== -->
-<div class="modal" id="probeModal" hidden>
+<div class="modal" id="probeModal" role="dialog" aria-modal="true" aria-labelledby="probeTitle" tabindex="-1" hidden>
   <div class="modal-card probe-card">
     <div class="modal-head">
       <h2 id="probeTitle">Configurar LEDs</h2>
@@ -264,7 +271,7 @@
 </div>
 
 
-<div class="toast" id="toast" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 
 <script src="/js/presets.js"></script>
 <script src="/js/probe.js"></script>

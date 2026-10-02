@@ -199,6 +199,9 @@ class SpectraApp:
         self._conexao = threading.Lock()
         self._watchdog = None
         self._watchdog_stop = threading.Event()
+        self._encerrando = False
+        self._primeira_conexao_pendente = False
+        self._recuperacao_inicial_tentada = False
         self.reconnects = 0
         self.last_exclusive = None
         self.last_error_exclusive = None
@@ -382,14 +385,51 @@ class SpectraApp:
         return self._esperar_porta(wait)
 
     def _esperar_porta(self, wait: float) -> bool:
-        deadline = time.time() + wait
-        while time.time() < deadline:
+        deadline = time.monotonic() + wait
+        while not self._encerrando and time.monotonic() < deadline:
             if _port_open(self.host, self.port):
                 return True
             time.sleep(0.5)
         self.status_msg = "OpenRGB nao respondeu a tempo"
         self.motivo_conexao = "sem_resposta"
         return False
+
+    def _recuperar_openrgb_inicial(self, pode_subir: bool) -> bool:
+        """Troca uma instancia travada na abertura, uma unica vez por sessao.
+
+        No logon outro atalho pode abrir o OpenRGB sem servidor SDK, ou antes
+        de os controladores estarem prontos. Esperar a porta para sempre nao
+        resolve isso. So encerramos o processo quando ha como abrir outro,
+        e conferimos que ele saiu antes de iniciar a substituicao.
+        """
+        from .core import admin
+
+        if (not pode_subir or self.renderer is not None or self._encerrando
+                or self._recuperacao_inicial_tentada
+                or not self.config.get("autostart_openrgb")
+                or self.host not in ("127.0.0.1", "localhost", "::1")
+                or self.port != 6742):
+            return False
+        if not admin.openrgb_rodando():
+            return False
+        if not self._openrgb_exe() and not admin.tarefa_existe(OPENRGB_TASK):
+            return False
+        self._recuperacao_inicial_tentada = True
+        self.status_msg = "reiniciando o OpenRGB que nao respondeu na abertura"
+        self.client.close()
+        if not admin.encerrar_openrgb():
+            if (not admin.tarefa_existe(OPENRGB_TASK)
+                    or not admin.encerrar_tarefa(OPENRGB_TASK)):
+                return False
+        deadline = time.monotonic() + 10.0
+        while admin.openrgb_rodando():
+            if self._encerrando or time.monotonic() >= deadline:
+                return False
+            time.sleep(0.3)
+        if self._encerrando or _port_open(self.host, self.port):
+            # Outra instancia pode ter tomado a porta durante a troca.
+            return not self._encerrando
+        return self._start_openrgb() and self._esperar_porta(30.0)
 
     def _liga_teclado(self):
         """Liga o teclado Akko na cena, se houver um e a configuracao pedir.
@@ -705,11 +745,20 @@ class SpectraApp:
         respostas uma da outra no meio do carregamento dos dispositivos.
         """
         with self._conexao:
+            if self._encerrando:
+                return False
+            primeira = self.renderer is None
+            if primeira:
+                self._primeira_conexao_pendente = True
             self.connecting = True
             try:
                 return self._connect(exclusive_pass, pode_subir)
             finally:
                 self.connecting = False
+                # A primeira falha tambem precisa de vigia: no logon o SDK
+                # pode ficar pronto depois do prazo da tentativa inicial.
+                if primeira and not self._encerrando:
+                    self.start_watchdog()
 
     def _connect(self, exclusive_pass: bool, pode_subir: bool = True) -> bool:
         if exclusive_pass:
@@ -722,33 +771,51 @@ class SpectraApp:
                 self.last_error_exclusive = str(exc)
         self.motivo_conexao = None
         self.erro_conexao = None
+        if self.renderer:
+            # Nenhum quadro deve sair enquanto o socket e a lista de
+            # dispositivos estao sendo trocados pela reconexao.
+            self.renderer.stop()
+        self.connected = False
         aberto = self.ensure_openrgb(pode_subir=pode_subir)
-        try:
-            self.client.close()
-            self.client.connect()
-            devices = self.client.load_devices()
-            espera = 0.0
-            while not devices and espera < 20.0:
-                self.status_msg = "OpenRGB detectando hardware"
-                time.sleep(1.5)
-                espera += 1.5
+        for tentativa in range(2):
+            try:
+                if self._encerrando:
+                    return False
+                self.client.close()
+                self.client.connect()
                 devices = self.client.load_devices()
-        except (OpenRGBError, OSError) as exc:
-            self.connected = False
-            if aberto or self.motivo_conexao is None:
-                self.motivo_conexao = "recusada"
-            # O detalhe do Windows fica a parte. Na barra do topo ele quebrava
-            # a linha e esmagava o resto; o aviso da tela inicial o mostra.
-            self.erro_conexao = str(exc)
-            self.status_msg = "sem conexao com o OpenRGB"
-            return False
+                espera = 0.0
+                while not devices and espera < 20.0 and not self._encerrando:
+                    self.status_msg = "OpenRGB detectando hardware"
+                    time.sleep(1.5)
+                    espera += 1.5
+                    devices = self.client.load_devices()
+                if self._encerrando:
+                    self.client.close()
+                    return False
+                if not devices:
+                    raise OpenRGBError("OpenRGB ainda nao encontrou dispositivos; "
+                                       "vou tentar novamente")
+                break
+            except (OpenRGBError, OSError) as exc:
+                self.client.close()
+                if tentativa == 0 and self._recuperar_openrgb_inicial(pode_subir):
+                    aberto = True
+                    continue
+                if aberto or self.motivo_conexao is None:
+                    self.motivo_conexao = "recusada"
+                # O detalhe do Windows fica a parte. Na barra do topo ele
+                # quebrava a linha; a tela inicial mostra o motivo completo.
+                self.erro_conexao = str(exc)
+                self.status_msg = "sem conexao com o OpenRGB"
+                return False
 
         self.connected = True
+        self._primeira_conexao_pendente = False
         self.status_msg = "conectado"
         self.motivo_conexao = None
         self.erro_conexao = None
         self._apply_zone_sizes(devices)
-        self.check_elevacao()
 
         settings = dict(self.config.get("settings") or {})
         settings["enabled_devices"] = self.config.get("enabled_devices") or {}
@@ -770,6 +837,7 @@ class SpectraApp:
             self.renderer.layout_config = self.config.get("layout") or {}
             self.renderer.settings.update(settings)
             self.renderer.set_devices(devices)
+        self.check_elevacao()
         self.renderer.connection_lost = False
         self.renderer.arm_direct()
         self._liga_teclado()
@@ -781,6 +849,8 @@ class SpectraApp:
 
     def start_watchdog(self):
         """Sobe o vigia que reconecta quando a conexao cai."""
+        if self._encerrando:
+            return
         if self._watchdog and self._watchdog.is_alive():
             return
         self._watchdog_stop.clear()
@@ -818,7 +888,7 @@ class SpectraApp:
                     pass
             self._vigia_teclado()
             r = self.renderer
-            if r is None:
+            if r is None and not self._primeira_conexao_pendente:
                 continue
             # o assistente de descoberta e o reparo de privilegio mexem na
             # conexao de proposito; o vigia nao pode disputar com eles, nem
@@ -827,15 +897,17 @@ class SpectraApp:
                     or self._reparando or self.connecting):
                 delay = 2.0
                 continue
-            alive = bool(r._thread and r._thread.is_alive())
+            alive = bool(r and r._thread and r._thread.is_alive())
             if self.connected and alive and not r.connection_lost:
                 delay = 2.0
                 continue
 
             self.connected = False
-            self.status_msg = "conexao com o OpenRGB caiu; reconectando"
+            self.status_msg = ("tentando a primeira conexao com o OpenRGB"
+                               if self._primeira_conexao_pendente else
+                               "conexao com o OpenRGB caiu; reconectando")
             try:
-                ok = self.connect(pode_subir=False)
+                ok = self.connect(pode_subir=self._primeira_conexao_pendente)
             except Exception as exc:
                 # Erro fora do previsto nao pode matar o vigia: sem ele, a
                 # proxima queda do OpenRGB nunca mais seria reconectada.
@@ -900,6 +972,7 @@ class SpectraApp:
 
     def shutdown(self, blank=True):
         """Encerra tudo em ordem, apagando os LEDs por padrao."""
+        self._encerrando = True
         self._watchdog_stop.set()
         try:
             self.save_config()

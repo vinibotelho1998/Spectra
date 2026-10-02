@@ -174,6 +174,15 @@ class TestExecucao:
 class TestIsolamento:
     """Aplicar um preset e mexer na cena nao pode mudar o preset guardado."""
 
+    def test_editar_cena_exportada_nao_altera_catalogo(self):
+        preset = presets.Preset("isolado", "Isolado", "Essenciais", "d", ["#fff"],
+                                [presets.L("chase", {"colors": ["#f00", "#0f0"]})])
+        scene = preset.scene()
+        scene["layers"][0]["params"]["colors"][0] = "#000"
+        scene["layers"].append(presets.L("blackout"))
+        assert len(preset.layers) == 1
+        assert preset.layers[0]["params"]["colors"] == ["#f00", "#0f0"]
+
     def test_camada_montada_nao_divide_o_dicionario(self):
         a = presets.L("static")
         b = presets.L("static")

@@ -6,7 +6,7 @@
   --line: #212836;
   --line-soft: #1a2029;
   --text: #e8ecf5;
-  --muted: #838fa5;
+  --muted: #9ba8bc;
   --accent: #00d9ff;
   --accent-2: #a855f7;
   --accent-3: #ff2d75;
@@ -14,7 +14,7 @@
   --warn: #ffb020;
   --err: #ff4d5e;
   --grad: linear-gradient(100deg, var(--accent), var(--accent-2) 55%, var(--accent-3));
-  --r: 10px;
+  --r: 12px;
   --r-sm: 7px;
   --shadow: 0 10px 34px rgba(0, 0, 0, .5);
   --focus: 0 0 0 2px rgba(0, 217, 255, .45);
@@ -28,6 +28,7 @@ html, body {
 }
 
 body {
+  color-scheme: dark;
   background: var(--bg);
   color: var(--text);
   font: 13px/1.5 "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, sans-serif;
@@ -192,6 +193,15 @@ input:focus-visible, select:focus-visible { box-shadow: none; border-color: var(
 
 .content { flex: 1; overflow: auto; padding: 16px; min-width: 0; scroll-behavior: smooth; }
 
+.page-heading { display: flex; align-items: center; justify-content: space-between;
+                gap: 16px; margin: 6px 0 22px; }
+.eyebrow { color: var(--accent); font-size: 10px; font-weight: 600; letter-spacing: .15em; }
+.page-heading h1 { font-size: clamp(22px, 2.4vw, 30px); letter-spacing: -.03em; margin-top: 4px; }
+.page-heading p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.catalog-count { flex: none; padding: 5px 11px; border: 1px solid var(--line);
+                 border-radius: 999px; color: var(--muted); font-size: 11px; }
+.catalog-count:empty { display: none; }
+
 .tab { display: none; }
 .tab.active { display: block; animation: fade .18s ease; }
 @keyframes fade { from { opacity: 0; transform: translateY(4px); } }
@@ -350,8 +360,9 @@ input[type=color] {
   background: var(--bg-2); cursor: pointer;
 }
 
-.switch { display: flex; align-items: center; gap: 9px; cursor: pointer; }
-.switch input { display: none; }
+.switch { display: flex; align-items: center; gap: 9px; cursor: pointer; position: relative; }
+.switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 3px; }
 .switch .track {
   width: 34px; height: 19px; border-radius: 999px;
   background: var(--line); position: relative; transition: background .18s;
@@ -649,11 +660,17 @@ input[type=color] {
   display: flex; flex-direction: column;
 }
 .preset:hover { border-color: var(--accent); transform: translateY(-2px); }
+.preset:focus-within { border-color: var(--accent); }
+.preset-apply { border: 0; padding: 0; display: flex; flex-direction: column; flex: 1;
+                width: 100%; text-align: left; color: inherit; font: inherit;
+                background: transparent; cursor: pointer; }
+.preset-apply > .swatch, .preset-apply > .body { width: 100%; }
+.preset-apply:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .preset.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset, 0 0 22px rgba(0, 217, 255, .12); }
 
 /* a faixa de cor so anima no hover e no preset tocando: animar 80 cards ao
    mesmo tempo custava repintura constante sem acrescentar informacao */
-.preset .swatch { position: relative; height: 52px; overflow: hidden; }
+.preset .swatch { position: relative; height: 62px; overflow: hidden; flex: none; }
 .preset .swatch::before {
   content: ""; position: absolute; inset: 0; width: 300%;
   background: var(--sw); background-size: 33.3334% 100%;
@@ -663,7 +680,7 @@ input[type=color] {
 }
 @keyframes swatchpan { to { transform: translateX(-33.3334%); } }
 
-.preset .body { padding: 9px 11px 11px; flex: 1; }
+.preset .body { padding: 12px 13px 32px; flex: 1; }
 .preset .t { font-size: 12.5px; font-weight: 600; margin-bottom: 3px; padding-right: 18px; }
 .preset .d { font-size: 10.5px; color: var(--muted); line-height: 1.45; }
 .preset .badge {
@@ -682,8 +699,8 @@ input[type=color] {
 .preset .fav {
   position: absolute; right: 6px; bottom: 6px;
   width: 24px; height: 24px; border-radius: 6px; border: 0;
-  background: transparent; color: #3d4757; cursor: pointer;
-  display: grid; place-items: center; opacity: 0; transition: opacity .15s, color .15s;
+  background: transparent; color: var(--muted); cursor: pointer;
+  display: grid; place-items: center; opacity: .65; transition: opacity .15s, color .15s;
 }
 .preset .fav svg { width: 14px; height: 14px; }
 .preset:hover .fav, .preset .fav.on, .preset .fav:focus-visible { opacity: 1; }
@@ -775,6 +792,51 @@ input[type=color] {
   .layout-grid { grid-template-columns: 1fr; height: auto; }
   .fx-layout { grid-template-columns: 1fr; }
   .fx-side { position: static; }
+  .fx-side { grid-row: 1; max-height: none; display: grid; grid-template-columns: minmax(140px, 34%) 1fr;
+             align-items: start; column-gap: 16px; }
+  .fx-side > .panel-head { grid-column: 1 / -1; }
+  .fx-side .now-playing { margin-top: 0; max-height: 300px; }
+  .fx-list-panel { min-height: 0; }
+}
+
+@media (max-width: 680px) {
+  .topbar { height: auto; min-height: 100px; flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+  .brand { font-size: 11px; }
+  .status { margin-left: auto; max-width: 55%; font-size: 10px; }
+  .status .metric, .status .sep { display: none; }
+  .topctl { width: 100%; justify-content: flex-end; }
+  .bright { flex: 1; }
+  .bright input[type=range] { width: 100%; }
+  .shell { height: calc(100% - 100px); flex-direction: column; }
+  .sidenav { width: 100%; flex: 0 0 auto; flex-direction: row; padding: 4px;
+             gap: 2px; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  .navbtn { flex: 1; min-width: 50px; padding: 8px 2px; font-size: 9px; gap: 3px; }
+  .navbtn .ic { width: 16px; height: 16px; }
+  .navbtn .kbd, .sidenav .spacer { display: none; }
+  .navbtn.active::before { left: 8px; right: 8px; top: auto; bottom: 0; width: auto; height: 2px; }
+  .content { padding: 12px; }
+  .page-heading { margin-bottom: 16px; }
+  .catalog-count { display: none; }
+  .quickbar { gap: 8px; padding: 10px; }
+  .panel-head { flex-wrap: wrap; }
+  .fx-list-panel .head-actions { width: 100%; margin-left: 0; }
+  .panel-head input[type=search] { width: 100%; }
+  .sources-grid, .settings-grid { grid-template-columns: minmax(0, 1fr); }
+  .device .zone-row { flex-wrap: wrap; }
+  .scene-grid, .layout-grid { height: auto; }
+  .modal { padding: 12px; }
+  .modal-head { flex-wrap: wrap; gap: 8px; }
+  .modal-head input { order: 3; flex: 1 0 100%; max-width: none; }
+  .probe-card .modal-body { min-height: 0; }
+  .inv-list { overflow-x: auto; }
+  .inv-row, .inv-cols { min-width: 620px; }
+  .probe-actions { flex-wrap: wrap; }
+  .btn.big { min-width: 0; padding: 14px 20px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important;
+                         scroll-behavior: auto !important; }
 }
 
 /* sem o motor no ar nao ha cena para trocar: a vitrine e o + Camada

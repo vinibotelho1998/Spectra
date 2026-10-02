@@ -122,6 +122,14 @@ class TestAgendador:
         _windows_falso(monkeypatch, erro=OSError("schtasks travou"))
         assert admin.tarefa_existe("Minha") is False
         assert admin.rodar_tarefa("Minha") is False
+        assert admin.encerrar_tarefa("Minha") is False
+
+    def test_encerrar_so_a_tarefa_indicada(self, monkeypatch):
+        pedidos = _windows_falso(monkeypatch)
+        assert admin.encerrar_tarefa("Spectra - OpenRGB SDK Server") is True
+        assert pedidos == [["schtasks", "/end", "/tn", "Spectra - OpenRGB SDK Server"]]
+        _windows_falso(monkeypatch, codigo=1)
+        assert admin.encerrar_tarefa("Spectra - OpenRGB SDK Server") is False
 
     def test_encerrar_derruba_so_o_openrgb(self, monkeypatch):
         pedidos = _windows_falso(monkeypatch, codigo=0)

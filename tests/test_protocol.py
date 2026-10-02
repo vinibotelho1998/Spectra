@@ -628,3 +628,85 @@ class TestConversa:
         assert c.protocol == 4
         assert c.connected is True
         assert sock.timeout == 1.5
+
+    def test_conectar_fecha_socket_anterior(self, monkeypatch):
+        from spectra.core import protocol as proto_mod
+        c = _cliente()
+        fechados = []
+        c.sock.close = lambda: fechados.append(True)
+        novo = SocketRoteiro(pacote(0, REQUEST_PROTOCOL_VERSION, struct.pack("<I", 5)))
+        monkeypatch.setattr(proto_mod.socket, "create_connection", lambda *a, **k: novo)
+        c.connect()
+        assert fechados == [True]
+        assert c.sock is novo
+
+    def test_negociacao_sem_resposta_nao_parece_conectada(self, monkeypatch):
+        from spectra.core import protocol as proto_mod
+        sock = SocketRoteiro()
+        monkeypatch.setattr(proto_mod.socket, "create_connection", lambda *a, **k: sock)
+        c = OpenRGBClient()
+        with pytest.raises(OpenRGBError, match="negociacao"):
+            c.connect()
+        assert not c.connected
+
+    def test_resposta_de_outro_dispositivo_nao_e_aceita(self):
+        c = _cliente(pacote(2, REQUEST_CONTROLLER_COUNT, struct.pack("<I", 99))
+                     + pacote(0, REQUEST_CONTROLLER_COUNT, struct.pack("<I", 4)))
+        assert c.controller_count() == 4
+
+    def test_socket_quebrado_e_fechado_sem_apagar_conexao_nova(self):
+        c = OpenRGBClient()
+        antigo = SocketOk()
+        fechados = []
+        antigo.close = lambda: fechados.append(True)
+        novo = SocketOk()
+        c.sock = novo
+        c._perde(antigo)
+        assert c.sock is novo
+        assert fechados == [True]
+
+    def test_consultas_concorrentes_nao_misturam_respostas(self):
+        import threading
+        c = OpenRGBClient()
+        lendo = threading.Event()
+        liberar = threading.Event()
+        segunda_iniciada = threading.Event()
+        envios = []
+        resultados = []
+
+        def enviar(dev, cmd, data=b""):
+            envios.append(dev)
+
+        def receber():
+            dev = envios[-1]
+            if dev == 1:
+                lendo.set()
+                assert liberar.wait(2)
+            return dev, 77, bytes([dev])
+
+        c._send = enviar
+        c._recv_packet = receber
+        def consultar(dev):
+            if dev == 2:
+                segunda_iniciada.set()
+            resultados.append(c._request(dev, 77))
+
+        primeira = threading.Thread(target=consultar, args=(1,))
+        segunda = threading.Thread(target=consultar, args=(2,))
+        primeira.start()
+        try:
+            assert lendo.wait(2)
+            segunda.start()
+            assert segunda_iniciada.wait(2)
+            # A transacao continua dona do lock durante a leitura.
+            adquirido = c._lock.acquire(blocking=False)
+            if adquirido:
+                c._lock.release()
+            assert not adquirido
+            assert envios == [1]
+        finally:
+            liberar.set()
+            primeira.join(2)
+            if segunda.ident is not None:
+                segunda.join(2)
+        assert resultados == [b"\x01", b"\x02"]

@@ -411,16 +411,23 @@ class OpenRGBClient:
         self.sock = None
         self.protocol = CLIENT_PROTOCOL_VERSION
         self.devices = []
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def connect(self, timeout: float = 4.0) -> None:
         """Abre a conexao, se apresenta e negocia a versao do protocolo."""
+        self.close()
         s = socket.create_connection((self.host, self.port), timeout=timeout)
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        s.settimeout(timeout)
         self.sock = s
-        self._send(0, SET_CLIENT_NAME, self.client_name.encode() + b"\x00")
-        self._negotiate()
+        try:
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            s.settimeout(timeout)
+            self._send(0, SET_CLIENT_NAME, self.client_name.encode() + b"\x00")
+            self._negotiate()
+            if not self.connected:
+                raise OpenRGBError("servidor OpenRGB nao respondeu a negociacao")
+        except Exception:
+            self._perde(s)
+            raise
 
     def close(self) -> None:
         """Fecha a conexao, se houver alguma aberta."""
@@ -439,6 +446,10 @@ class OpenRGBClient:
         # esse derrubaria a conexao recem aberta.
         if self.sock is s:
             self.sock = None
+        try:
+            s.close()
+        except (OSError, AttributeError):
+            pass
 
     def _send(self, dev: int, cmd: int, data: bytes = b"") -> None:
         pkt = HEADER.pack(MAGIC, dev, cmd, len(data)) + data
@@ -482,13 +493,16 @@ class OpenRGBClient:
         return dev, cmd, data
 
     def _request(self, dev: int, cmd: int, data: bytes = b"") -> bytes:
-        self._send(dev, cmd, data)
-        while True:
-            rdev, rcmd, rdata = self._recv_packet()
-            if rcmd == DEVICE_LIST_UPDATED:
-                continue
-            if rcmd == cmd:
-                return rdata
+        # Uma consulta inclui envio E resposta. Duas threads lendo juntas
+        # podiam consumir o cabecalho ou a resposta uma da outra.
+        with self._lock:
+            self._send(dev, cmd, data)
+            while True:
+                rdev, rcmd, rdata = self._recv_packet()
+                if rcmd == DEVICE_LIST_UPDATED:
+                    continue
+                if rcmd == cmd and rdev == dev:
+                    return rdata
 
     def _negotiate(self) -> None:
         try:

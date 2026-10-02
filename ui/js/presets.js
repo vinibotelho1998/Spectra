@@ -14,8 +14,9 @@ const INV_KEY = "spectra.inventory";
 let FAVS = new Set();
 
 function saveFavs(set) {
-  API.post("/api/favoritos", { ids: [...set] })
-    .then((r) => { if (S.state) S.state.favoritos = r.favoritos || [...set]; })
+  const ids = [...set];
+  orderedPost("favorites", "/api/favoritos", { ids })
+    .then((r) => { if (S.state) S.state.favoritos = r.favoritos || ids; })
     .catch((e) => toast(e.message, true));
 }
 
@@ -68,6 +69,7 @@ function buildQuickBar() {
     b.className = "sw";
     b.style.background = c;
     b.title = c;
+    b.setAttribute("aria-label", `Aplicar cor ${c}`);
     b.addEventListener("click", () => applySolid(c, snapshotScene()));
     box.appendChild(b);
   }
@@ -80,6 +82,7 @@ function buildQuickBar() {
     applySolidSoon(e.target.value);
   });
   $("#quickColor").addEventListener("change", (e) => {
+    if (_solidSoon) _solidSoon.cancel();
     const antes = antesDoArrasto;
     antesDoArrasto = null;
     applySolid(e.target.value, antes || snapshotScene());
@@ -104,7 +107,7 @@ async function applySolid(hex, antes) {
   $("#quickColor").value = hex;
   const calado = antes === undefined;
   try {
-    await API.post("/api/layers", {
+    await orderedPost("scene", "/api/layers", {
       preset: null,
       layers: [{ effect: "static", params: { color: hex, intensity: 1.0 },
                  blend: "normal", opacity: 1.0, enabled: true, name: "Cor unica" }],
@@ -134,7 +137,7 @@ function snapshotScene(comAjustes) {
   const st = S.state || {};
   const s = st.settings || {};
   return {
-    layers: (st.layers || []).map((l) => ({ ...l })),
+    layers: JSON.parse(JSON.stringify(st.layers || [])),
     preset: st.last_preset || null,
     perfil: st.perfil_atual || null,
     ajustes: comAjustes ? { brightness: s.brightness, gamma: s.gamma,
@@ -143,14 +146,15 @@ function snapshotScene(comAjustes) {
 }
 
 function undoAction(antes) {
-  if (!antes || !antes.layers.length) return null;
+  if (!antes) return null;
   return {
     label: "Desfazer",
     run: async () => {
       try {
-        await API.post("/api/layers", { layers: antes.layers, preset: antes.preset,
+        if (_solidSoon) _solidSoon.cancel();
+        await orderedPost("scene", "/api/layers", { layers: antes.layers, preset: antes.preset,
                                         perfil: antes.perfil });
-        if (antes.ajustes) await API.post("/api/settings", antes.ajustes);
+        if (antes.ajustes) await orderedPost("settings", "/api/settings", antes.ajustes);
         S.selected = null;
         await refreshState();
         renderParams();
@@ -227,8 +231,10 @@ function renderPresets(filter) {
     box.innerHTML = cat === "favoritos"
       ? `<p class="muted center" style="padding:30px">Nenhum favorito ainda. Passe o mouse
          num efeito e clique na estrela.</p>`
-      : `<p class="muted center" style="padding:30px">Nada encontrado.</p>`;
+      : `<p class="muted center" style="padding:30px">Nenhum efeito para ${q ? `“${esc(filter !== undefined ? filter : $("#presetSearch").value)}”` : "esta categoria"}. Tente outro nome ou categoria.</p>`;
   }
+  const count = $("#presetCount");
+  if (count) count.textContent = `${mostrados} ${mostrados === 1 ? "cena" : "cenas"}`;
 
   const escondidos = allPresets().filter((p) => p.refined === false && !FAVS.has(p.id)).length;
   if (escondidos && cat !== "favoritos") {
@@ -250,7 +256,7 @@ function renderPresets(filter) {
 }
 
 function presetCard(p, disponivel) {
-  const b = document.createElement("button");
+  const b = document.createElement("div");
   b.className = "preset";
   b.dataset.preset = p.id;
   const cols = p.swatch.concat(p.swatch[0]).join(",");
@@ -264,23 +270,28 @@ function presetCard(p, disponivel) {
     ? `<span class="badge">usa ${p.needs.map((n) => NEED_LABEL[n] || n).join(" + ")}</span>`
     : (p.refined === false ? `<span class="badge forte">intenso</span>` : "");
   b.innerHTML =
+    `<button class="preset-apply" type="button" aria-label="Aplicar ${esc(p.name)}" aria-pressed="false">` +
     `<div class="swatch" style="--sw:linear-gradient(90deg,${cols})"></div>` +
     badge +
     `<span class="playing" hidden>tocando</span>` +
     `<div class="body"><div class="t">${esc(p.name)}</div>` +
-    `<div class="d">${esc(p.description)}</div></div>` +
-    `<button class="fav${FAVS.has(p.id) ? " on" : ""}" title="Favoritar">${ICON_STAR}</button>`;
+    `<div class="d">${esc(p.description)}</div></div></button>` +
+    `<button type="button" class="fav${FAVS.has(p.id) ? " on" : ""}" title="${FAVS.has(p.id) ? "Remover dos favoritos" : "Favoritar"}" aria-label="Favoritar ${esc(p.name)}" aria-pressed="${FAVS.has(p.id)}">${ICON_STAR}</button>`;
   if (falta.length) b.title = "Esta maquina nao mede o que este efeito usa: veja a aba Fontes";
   else if (!disponivel) b.title = "A fonte que este efeito usa esta indisponivel agora";
-  b.addEventListener("click", (e) => {
-    if (e.target.closest(".fav")) return;
-    applyPreset(p.id);
-  });
+  b.querySelector(".preset-apply").addEventListener("click", () => applyPreset(p.id));
   b.querySelector(".fav").addEventListener("click", (e) => {
     e.stopPropagation();
     FAVS.has(p.id) ? FAVS.delete(p.id) : FAVS.add(p.id);
     saveFavs(FAVS);
     e.currentTarget.classList.toggle("on", FAVS.has(p.id));
+    e.currentTarget.setAttribute("aria-pressed", String(FAVS.has(p.id)));
+    e.currentTarget.title = FAVS.has(p.id) ? "Remover dos favoritos" : "Favoritar";
+    if (presetCat === "favoritos" && !$("#presetSearch").value.trim()) {
+      renderPresets();
+      $("#presetGrid .fav, #presetChips .chip")?.focus();
+      return;
+    }
     renderPresetChips();
   });
   return b;
@@ -290,11 +301,11 @@ function renderPresetChips(marcado) {
   const box = $("#presetChips");
   if (!box || !S.catalog) return;
   const cats = (S.catalog.presets || []).map((g) => g.category);
-  const total = allPresets().filter((p) => showAllPresets || p.refined !== false).length;
+  const total = allPresets().filter((p) => showAllPresets || p.refined !== false || FAVS.has(p.id)).length;
   const opts = [["todos", "Todos", total]];
-  if (FAVS.size) opts.push(["favoritos", "Favoritos", FAVS.size]);
+  if (FAVS.size || presetCat === "favoritos") opts.push(["favoritos", "Favoritos", FAVS.size]);
   for (const g of (S.catalog.presets || [])) {
-    const n = g.presets.filter((p) => showAllPresets || p.refined !== false).length;
+    const n = g.presets.filter((p) => showAllPresets || p.refined !== false || FAVS.has(p.id)).length;
     if (n) opts.push([g.category, g.category, n]);
   }
   if (!cats.includes(presetCat) && presetCat !== "todos" && presetCat !== "favoritos")
@@ -305,12 +316,15 @@ function renderPresetChips(marcado) {
   for (const [id, label, n] of opts) {
     const b = document.createElement("button");
     b.className = "chip" + (on === id ? " on" : "");
+    b.dataset.category = id;
+    b.setAttribute("aria-pressed", String(on === id));
     b.innerHTML = `${esc(label)}<span class="n">${n}</span>`;
     b.addEventListener("click", () => {
       presetCat = id;
       // escolher categoria e deixar a busca de lado
       $("#presetSearch").value = "";
       renderPresets();
+      $$("#presetChips .chip").find((chip) => chip.dataset.category === id)?.focus();
     });
     box.appendChild(b);
   }
@@ -321,15 +335,17 @@ function markActivePreset() {
   $$(".preset").forEach((el) => {
     const on = el.dataset.preset === cur;
     el.classList.toggle("on", on);
+    el.querySelector(".preset-apply")?.setAttribute("aria-pressed", String(on));
     const tag = el.querySelector(".playing");
     if (tag) tag.hidden = !on;
   });
 }
 
 async function applyPreset(id) {
+  if (_solidSoon) _solidSoon.cancel();
   const antes = snapshotScene();
   try {
-    const r = await API.post("/api/preset/apply", { id });
+    const r = await orderedPost("scene", "/api/preset/apply", { id });
     if (!r.ok) return toast(r.error || "falhou ao aplicar", true);
     S.selected = null;
     await refreshState();
@@ -413,9 +429,7 @@ function renderNowPlaying() {
       .includes(q.name)).slice(0, 3);
     for (const q of quick) {
       const el = paramControl(q, L, (v) => {
-        Object.assign(L.params, { [q.name]: v });
-        API.post("/api/layer/update", { id: L.id, patch: { params: { [q.name]: v } } })
-          .catch(() => {});
+        patchLayerSoon({ params: { [q.name]: v } }, L.id);
       }, true);
       if (el) wrap.appendChild(el);
     }

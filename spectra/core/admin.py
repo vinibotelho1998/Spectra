@@ -214,6 +214,22 @@ def rodar_tarefa(nome: str) -> bool:
         return False
 
 
+def encerrar_tarefa(nome: str) -> bool:
+    """Encerra somente a instancia da tarefa indicada, sem pedir elevacao.
+
+    O agendador pode encerrar o servidor elevado que ele proprio iniciou,
+    mesmo quando o taskkill de um Spectra comum recebe acesso negado.
+    Uma recusa continua sendo recusa; nao abre aviso de UAC no logon.
+    """
+    try:
+        r = subprocess.run(["schtasks", "/end", "/tn", nome],
+                           capture_output=True, timeout=15,
+                           creationflags=NO_WINDOW)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 SEE_MASK_NOCLOSEPROCESS = 0x00000040
 SEE_MASK_NOASYNC = 0x00000100
 ERROR_CANCELLED = 1223

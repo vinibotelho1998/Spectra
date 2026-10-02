@@ -138,6 +138,21 @@ class TestCamadaDefeituosa:
         motor.set_layers([Layer("teste_nan")])
         assert not motor.render_once(1 / 60).any()
 
+    @pytest.mark.parametrize("saida", ["nao e uma cor", [[1, 0], [0]]])
+    def test_saida_nao_numerica_isola_a_camada(self, motor, monkeypatch, saida):
+        _efeito(monkeypatch, "teste_invalido", lambda ctx, p, st: saida)
+        ruim = Layer("teste_invalido")
+        motor.set_layers([_vermelho(), ruim])
+        assert np.allclose(motor.render_once(1 / 60), (1.0, 0.0, 0.0))
+        assert not ruim.enabled
+        assert "teste_invalido" in motor.last_error
+
+    def test_infinito_e_limitado_antes_de_multiplicar_camadas(self, motor, monkeypatch):
+        _efeito(monkeypatch, "teste_inf", lambda ctx, p, st:
+                np.tile([np.inf, -np.inf, np.nan], (ctx.n, 1)))
+        motor.set_layers([Layer("teste_inf"), Layer("teste_inf", blend_mode="multiply")])
+        assert np.allclose(motor.render_once(1 / 60), (1.0, 0.0, 0.0))
+
     def test_efeito_desconhecido_e_pulado(self, motor):
         motor.set_layers([Layer("nao_existe"), _vermelho()])
         assert np.allclose(motor.render_once(1 / 60), (1.0, 0.0, 0.0))
@@ -159,6 +174,12 @@ class TestCamadaDefeituosa:
 
 
 class TestParametros:
+
+    def test_lista_de_cores_carregada_nao_muda_cena_original(self):
+        data = {"effect": "chase", "params": {"colors": ["#ff0000", "#00ff00"]}}
+        layer = Layer.from_json(data)
+        layer.params["colors"][0] = "#000000"
+        assert data["params"]["colors"][0] == "#ff0000"
 
     def test_parametro_nulo_cai_no_padrao(self):
         camada = Layer("static", {"color": None, "intensity": 0.5})

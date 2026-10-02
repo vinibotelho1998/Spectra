@@ -9,7 +9,7 @@ hardware, e constrói por cima um motor de renderização, uma biblioteca com
 mais de cem efeitos e uma interface web local — tudo neste repositório, sem
 depender de nenhuma UI ou engine de terceiros.
 
-![Interface do Spectra](docs/screenshot.png)
+![Interface do Spectra](docs/screenshot.jpg)
 
 ## Por que existe
 
@@ -70,8 +70,8 @@ spectra/engine/canvas.py    mapa espacial: LED → (x, y), peças físicas 1D/2D
 spectra/engine/renderer.py  pilha de camadas, mistura, loop a 60 fps
 spectra/engine/palette.py   26 paletas + conversão de cor vetorizada
 spectra/engine/noise.py     value noise 3D, fbm, turbulência
-spectra/effects/            107 efeitos em 11 categorias
-spectra/presets.py          87 cenas prontas
+spectra/effects/            117 efeitos em 11 categorias
+spectra/presets.py          97 cenas prontas
 spectra/sources/            áudio (loopback WASAPI), tela (dxcam), sensores
 spectra/app.py              estado, perfis, assistente, vigia de conexão
 spectra/server.py           HTTP local + API + stream do quadro
@@ -85,29 +85,34 @@ de efeitos, a composição de camadas e a interface são todos deste projeto.
 
 ## Efeitos
 
-**107 efeitos em 11 categorias**, cada um com seus próprios parâmetros
+**117 efeitos em 11 categorias**, cada um com seus próprios parâmetros
 editáveis na interface — velocidade, paleta, cores, intensidade, e o que mais
 fizer sentido para aquele efeito especificamente.
 
 | Categoria | Qtd | Destaques |
 |---|---|---|
-| **Fluxo** | 13 | Pista, Neon, Cobra, Empilhar, Cascata — correm ao longo de cada peça |
-| **Geométricos** | 13 | Cross Over, Paralelo, Ondulação — efeitos 2D para fitas de cabo |
+| **Fluxo** | 14 | Pista, Neon, Cobra, Empilhar, Cascata, Maré — correm ao longo de cada peça |
+| **Geométricos** | 18 | Cross Over, Prisma, Eclipse, Lótus, Lissajous, Trama — padrões espaciais e efeitos 2D para fitas de cabo |
 | **Pixel** | 13 | Ponto Fino, Cometa Fino, Código — poucos LEDs acesos, borda seca |
 | **Básicos** | 12 | Cor Sólida, Gradiente, Respiração, Chase, Vela |
-| **Ondas** | 14 | Arco-Íris, Scanner, Espiral, Interferência, Túnel |
+| **Ondas** | 17 | Arco-Íris, Scanner, Espiral, Seda, Dunas, Hélice |
 | **Ruído** | 11 | Plasma, Fogo, Aurora, Nebulosa, Lava Lamp, Voronoi |
-| **Partículas** | 10 | Chuva, Neve, Meteoros, Raios, Fogos, Vaga-lumes |
+| **Partículas** | 11 | Chuva, Neve, Meteoros, Raios, Fogos, Vaga-lumes, Constelação |
 | **Simulação** | 6 | Game of Life, Reação-Difusão, Física de Ondas, Cardume |
 | **Áudio** | 8 | Espectro, Pulso de Grave, Osciloscópio, Fogo Sonoro |
 | **Sensores** | 4 | Cor por Temperatura, Barra de Carga, Alarme Térmico |
 | **Tela** | 3 | Ambilight, Ambilight (bordas), Clima da Tela |
 
-**87 presets prontos** aplicam uma cena completa com um clique; a grade mostra
-por padrão os 76 mais refinados, com os mais intensos (estrobo, flashes)
+**97 presets prontos** aplicam uma cena completa com um clique; a grade mostra
+por padrão os 86 mais refinados, com os mais intensos (estrobo, flashes)
 escondidos atrás de "Mostrar todos". Camadas podem ser combinadas com 12 modos
 de mistura na aba Avançado, e as fontes de áudio/tela/sensores ligam sozinhas
 conforme as camadas ativas.
+
+Os dez efeitos novos — **Seda, Prisma, Dunas, Eclipse, Lótus, Lissajous,
+Trama, Maré, Hélice e Constelação** — têm presets próprios e movimento suave.
+Velocidade zero congela o movimento e a cor; valores negativos invertem o
+sentido. Paleta, intensidade e alvo podem ser ajustados sem montar outra cena.
 
 ## Interface
 
@@ -161,8 +166,16 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
 
 ## Robustez
 
-- **Reconexão automática.** Se o servidor do OpenRGB cair, um vigia detecta e
-  reergue tudo sozinho, sem deixar os LEDs congelados numa cor.
+- **Recuperação na inicialização.** A primeira falha também inicia o vigia:
+  ele tenta novamente enquanto o Windows e o OpenRGB terminam de abrir. Se
+  uma instância local do OpenRGB estiver sem SDK ou não detectar nenhum
+  dispositivo no prazo, o Spectra tenta substituí-la uma vez, com o início
+  automático habilitado e um executável ou tarefa disponível. Antes de subir
+  outra, confirma que a anterior encerrou. O servidor elevado iniciado pela
+  tarefa do Spectra também pode ser encerrado pelo próprio agendador.
+- **Reconexão automática.** Se a conexão cair depois de funcionar, o vigia
+  reconecta quando o servidor voltar. Fechar o OpenRGB manualmente depois de
+  uma conexão bem-sucedida continua sendo respeitado.
 - **Exclusividade.** Ao iniciar, encerra software de RGB concorrente
   (GIGABYTE, iCUE, Mystic Light, Aura, L-Connect, SignalRGB...) e minimiza a
   janela do OpenRGB — dois programas escrevendo no mesmo controlador é a causa
@@ -245,6 +258,23 @@ iscc installer\spectra.iss /DMyAppVersion=1.0.0
 O executável instalado grava config e perfis em `%LOCALAPPDATA%\Spectra`,
 nunca na própria pasta de instalação — funciona sem privilégio de
 administrador mesmo instalado em `Program Files`.
+
+## Desenvolvimento e validação
+
+```powershell
+.venv\Scripts\pip install -r requirements-dev.txt
+.venv\Scripts\python -m pytest
+node --test tests/test_frontend.js
+.venv\Scripts\python tools/smoke.py
+.venv\Scripts\python tools/uidev.py
+```
+
+`uidev` usa uma bancada simulada e uma configuração separada. Os testes de
+conexão, recuperação de inicialização e API usam mocks, sem controlar os LEDs.
+As regressões da interface usam o executor de testes do Node.js, sem instalar
+dependências JavaScript.
+O workflow `Tests` valida pull requests; o workflow de release também executa
+a suíte antes de gerar o instalador.
 
 ## Ferramentas de diagnóstico
 
