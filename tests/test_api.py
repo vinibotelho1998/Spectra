@@ -139,6 +139,7 @@ def _sem_nada_de_verdade(monkeypatch):
 @pytest.fixture
 def spectra(tmp_path, monkeypatch):
     """Um app pronto, com dois dispositivos falsos e configuracao isolada."""
+    monkeypatch.setattr(app_mod, "ESTABILIZACAO_DISPOSITIVOS", 0.0)
     monkeypatch.setattr(app_mod, "CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(app_mod, "PROFILES_DIR", str(tmp_path / "profiles"))
     monkeypatch.setattr(app_mod, "CONFIG_FILE", str(tmp_path / "config.json"))
@@ -1568,11 +1569,14 @@ class TempoRapido:
 
     def __init__(self):
         self.esperas = []
+        self.avanco = 0.0
 
     def sleep(self, s):
         self.esperas.append(s)
+        self.avanco += s
 
-    monotonic = staticmethod(time.monotonic)
+    def monotonic(self):
+        return time.monotonic() + self.avanco
     perf_counter = staticmethod(time.perf_counter)
     time = staticmethod(time.time)
 
@@ -2168,6 +2172,24 @@ class TestConexaoCompleta:
         finally:
             b.renderer.stop()
 
+    @pytest.mark.parametrize("reconexao", [False, True])
+    def test_conexao_reaplica_modo_direto_mesmo_quando_ja_informado(
+            self, spectra, monkeypatch, reconexao):
+        devices = _bancada()
+        for device in devices:
+            device.active_mode = device.direct_mode().index
+        b = _app_novo(monkeypatch, devices)
+        if reconexao:
+            b.renderer = Renderer(b.client, _bancada())
+        pedidos = []
+        original = b.client.set_direct_mode
+        b.client.set_direct_mode = lambda i: pedidos.append(i) or original(i)
+        try:
+            assert b.connect() is True
+            assert pedidos == [0, 1]
+        finally:
+            b.renderer.stop()
+
     def test_contagem_salva_vale_antes_de_montar_o_mapa(self, spectra, tmp_path,
                                                         monkeypatch, sem_espera):
         mobo, ram = (d["key"] for d in spectra.state()["devices"])
@@ -2197,6 +2219,49 @@ class TestConexaoCompleta:
             assert b.status_msg == "conectado"
         finally:
             b.renderer.stop()
+
+    def test_descoberta_parcial_espera_placa_aparecer(self, spectra,
+                                                       monkeypatch, sem_espera):
+        monkeypatch.setattr(app_mod, "ESTABILIZACAO_DISPOSITIVOS", 3.0)
+        devices = _bancada()
+        b = _app_novo(monkeypatch, devices)
+        listas = iter([devices[:1], devices, devices, devices])
+        b.client.load_devices = lambda: next(listas)
+        try:
+            assert b.connect() is True
+            assert [d.name for d in b.renderer.all_devices] == ["Mobo", "RAM"]
+            assert len(sem_espera.esperas) == 3
+        finally:
+            b.renderer.stop()
+
+    def test_lista_instavel_tem_prazo(self, spectra, monkeypatch, sem_espera):
+        monkeypatch.setattr(app_mod, "ESTABILIZACAO_DISPOSITIVOS", 3.0)
+        devices = _bancada()
+        b = _app_novo(monkeypatch, devices)
+        chamadas = []
+
+        def lista_mutavel():
+            chamadas.append(1)
+            return devices[:1] if len(chamadas) % 2 else devices
+
+        b.client.load_devices = lista_mutavel
+        try:
+            assert b.connect() is True
+            assert 19.9 <= sum(sem_espera.esperas) <= 20.1
+            assert len(chamadas) > 2
+        finally:
+            b.renderer.stop()
+
+    def test_encerrar_interrompe_espera_de_descoberta(self, spectra,
+                                                    monkeypatch, sem_espera):
+        monkeypatch.setattr(app_mod, "ESTABILIZACAO_DISPOSITIVOS", 3.0)
+        b = _app_novo(monkeypatch, _bancada())
+        chamadas = []
+        b.client.load_devices = lambda: chamadas.append(1) or b.client.devices
+        sem_espera.sleep = lambda _: setattr(b, "_encerrando", True)
+        assert b.connect() is False
+        assert chamadas == [1]
+        assert b.renderer is None
 
     def test_passagem_exclusiva_na_abertura(self, spectra, monkeypatch):
         from spectra.core import exclusive

@@ -62,6 +62,8 @@ OPENRGB_CANDIDATES = [
 ]
 OPENRGB_TASK = "Spectra - OpenRGB SDK Server"
 OPENRGB_ARGS = ["--server", "--startminimized"]
+# A porta SDK pode abrir antes de a varredura de hardware terminar.
+ESTABILIZACAO_DISPOSITIVOS = 3.0
 
 CASE_SPOTS = {
     "topo_esq":     (0.22, 0.10), "topo_centro": (0.50, 0.10),
@@ -784,12 +786,36 @@ class SpectraApp:
                 self.client.close()
                 self.client.connect()
                 devices = self.client.load_devices()
-                espera = 0.0
-                while not devices and espera < 20.0 and not self._encerrando:
+                # O SDK pode aceitar conexoes enquanto ainda descobre a placa,
+                # depois da RAM. Espera a lista ficar estavel, com limite para
+                # nao prender a abertura caso ela continue mudando.
+                def assinatura(lista):
+                    return tuple((d.index, device_key(d),
+                                  tuple((z.index, z.leds_count) for z in d.zones))
+                                 for d in lista)
+
+                prazo = time.monotonic() + 20.0
+                anterior = assinatura(devices)
+                estavel_desde = time.monotonic() if devices else None
+                while not self._encerrando:
+                    agora = time.monotonic()
+                    if (devices and estavel_desde is not None
+                            and agora - estavel_desde >= ESTABILIZACAO_DISPOSITIVOS):
+                        break
+                    restante = prazo - agora
+                    if restante <= 0:
+                        break
                     self.status_msg = "OpenRGB detectando hardware"
-                    time.sleep(1.5)
-                    espera += 1.5
+                    time.sleep(min(1.5, restante))
+                    if self._encerrando:
+                        break
                     devices = self.client.load_devices()
+                    atual = assinatura(devices)
+                    if not devices:
+                        estavel_desde = None
+                    elif atual != anterior or estavel_desde is None:
+                        estavel_desde = time.monotonic()
+                    anterior = atual
                 if self._encerrando:
                     self.client.close()
                     return False
@@ -839,7 +865,9 @@ class SpectraApp:
             self.renderer.set_devices(devices)
         self.check_elevacao()
         self.renderer.connection_lost = False
-        self.renderer.arm_direct()
+        # O estado informado pelo SDK pode nao refletir o hardware apos
+        # abrir o OpenRGB. Reaplica o modo direto em cada conexao.
+        self.renderer.arm_direct(force=True)
         self._liga_teclado()
         self.renderer.start()
         self._sync_sources()
