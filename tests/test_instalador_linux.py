@@ -8,6 +8,10 @@ import shutil
 import subprocess
 import sys
 
+import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='instalador do Linux roda em bash')
+
 
 def test_instalador_cria_atalho_funcional_com_espacos(tmp_path):
     raiz = tmp_path / 'Spectra com espaço %'

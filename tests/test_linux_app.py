@@ -23,6 +23,7 @@ def test_config_usa_xdg(tmp_path, monkeypatch):
     assert app_module._config_root() == str(tmp_path / 'spectra')
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='permissao de execucao por chmod')
 def test_openrgb_path_e_appimage(aplicativo, tmp_path, monkeypatch):
     exe = tmp_path / 'OpenRGB.AppImage'
     exe.write_text('#!/bin/sh\n')

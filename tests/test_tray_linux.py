@@ -1,6 +1,11 @@
 import sys
 import types
+
+import pytest
 from spectra import tray
+
+# No Windows o pystray real usa o backend win32 e ignora os falsos do Linux.
+pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='bandeja do Linux')
 
 
 class Window:
