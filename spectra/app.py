@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import shutil
 import subprocess
 import sys
 import threading
@@ -45,6 +46,9 @@ def _app_root() -> str:
 
 
 def _config_root() -> str:
+    if sys.platform.startswith("linux"):
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+        return os.path.join(base, "spectra")
     if getattr(sys, "frozen", False):
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
         return os.path.join(base, "Spectra")
@@ -154,6 +158,26 @@ def _port_open(host="127.0.0.1", port=6742, timeout=0.4) -> bool:
             return True
     except OSError:
         return False
+
+
+def _openrgb_rodando() -> bool:
+    if not sys.platform.startswith("linux"):
+        from .core import admin
+        return admin.openrgb_rodando()
+    try:
+        import psutil
+        for proc in psutil.process_iter(["name", "cmdline"]):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                cmd = proc.info.get("cmdline") or []
+                executable = os.path.basename(cmd[0]).lower() if cmd else ""
+                if name == "openrgb" or executable.startswith("openrgb") and (executable == "openrgb" or executable.endswith(".appimage")):
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except (ImportError, OSError):
+        pass
+    return False
 
 
 def _grava_json(path: str, data) -> None:
@@ -295,6 +319,8 @@ class SpectraApp:
         escolhido = self.config.get("openrgb_exe")
         if isinstance(escolhido, str) and os.path.isfile(escolhido):
             return escolhido
+        if sys.platform.startswith("linux"):
+            return shutil.which("openrgb") or shutil.which("OpenRGB")
         return next((p for p in OPENRGB_CANDIDATES if os.path.isfile(p)), None)
 
     def set_openrgb_exe(self, caminho) -> dict:
@@ -304,7 +330,14 @@ class SpectraApp:
         vira a tarefa agendada que roda com privilegio maximo.
         """
         caminho = str(caminho or "").strip().strip('"')
-        if (os.path.basename(caminho).lower() != "openrgb.exe"
+        if sys.platform.startswith("linux"):
+            caminho = os.path.expanduser(caminho)
+            nome = os.path.basename(caminho).lower()
+            valido = nome == "openrgb" or (nome.startswith("openrgb") and nome.endswith(".appimage"))
+            if not valido or not os.path.isfile(caminho) or not os.access(caminho, os.X_OK):
+                return {"ok": False, "error": "Escolha o executavel openrgb ou OpenRGB AppImage"}
+            caminho = os.path.abspath(caminho)
+        elif (os.path.basename(caminho).lower() != "openrgb.exe"
                 or not os.path.isfile(caminho)):
             return {"ok": False,
                     "error": "Nao achei o OpenRGB.exe nesse caminho"}
@@ -322,6 +355,24 @@ class SpectraApp:
         privilegio e deixa a memoria RAM invisivel.
         """
         from .core import admin
+
+        if sys.platform.startswith("linux"):
+            exe = self._openrgb_exe()
+            if not exe:
+                self.status_msg = "OpenRGB nao encontrado"
+                self.motivo_conexao = "nao_instalado"
+                return False
+            try:
+                # --startminimized implies a GUI in OpenRGB, which is not
+                # available in headless sessions. The SDK server runs alone.
+                subprocess.Popen([exe, "--server", "--server-port", str(self.port)],
+                                 close_fds=True, start_new_session=True)
+            except OSError as exc:
+                self.status_msg = f"falha ao iniciar OpenRGB: {exc}"
+                self.motivo_conexao = "falha_partida"
+                self.erro_conexao = str(exc)
+                return False
+            return True
 
         if admin.tarefa_existe(OPENRGB_TASK) and admin.rodar_tarefa(OPENRGB_TASK):
             return True
@@ -369,13 +420,13 @@ class SpectraApp:
 
         if _port_open(self.host, self.port):
             return True
-        if admin.openrgb_rodando():
+        if self.host in ("127.0.0.1", "localhost", "::1") and _openrgb_rodando():
             # O OpenRGB leva uns cinco segundos varrendo o hardware antes de
             # abrir a porta. Quem subia outro nessa janela, como no logon com
             # a tarefa antiga do Prism, deixava dois disputando os mesmos LEDs.
             self.status_msg = "esperando o OpenRGB abrir a porta"
             return self._esperar_porta(wait)
-        if not pode_subir:
+        if not pode_subir or self.host not in ("127.0.0.1", "localhost", "::1"):
             self.motivo_conexao = "servidor_fechado"
             return False
         if not self.config.get("autostart_openrgb"):
@@ -406,6 +457,9 @@ class SpectraApp:
         """
         from .core import admin
 
+        # Nao encerrar processos de terceiros no Linux durante a reconexao.
+        if sys.platform.startswith("linux"):
+            return False
         if (not pode_subir or self.renderer is not None or self._encerrando
                 or self._recuperacao_inicial_tentada
                 or not self.config.get("autostart_openrgb")
@@ -640,6 +694,10 @@ class SpectraApp:
         interface le.
         """
         from .core import admin
+        if sys.platform.startswith("linux"):
+            self.elevacao = {"plataforma": "linux", "servidor_elevado": None,
+                             "openrgb": self._openrgb_exe()}
+            return self.elevacao
         dram = [d for d in (self.renderer.all_devices if self.renderer else [])
                 if d.type_name == "DRAM"]
         self.elevacao = {
@@ -672,6 +730,8 @@ class SpectraApp:
 
     def _reparar_elevacao(self) -> dict:
         from .core import admin
+        if sys.platform.startswith("linux"):
+            return {"ok": False, "erro": "Configure as permissoes de dispositivos do OpenRGB no Linux"}
         exe = self._openrgb_exe()
         if not exe:
             return {"ok": False, "erro": "OpenRGB nao encontrado"}
@@ -1110,6 +1170,8 @@ class SpectraApp:
     def _erro_sensores(self, faltam) -> str:
         s = self.sensors
         oque = " e ".join(ROTULO_SENSOR.get(k, k) for k in sorted(faltam))
+        if sys.platform.startswith("linux"):
+            return f"esta maquina nao informa {oque} pelos sensores disponiveis"
         if s is not None and not s.lhm_ok and set(faltam) & SENSORES_LHM:
             dll = s.lhm.dll_path
             if not os.path.isfile(dll):
@@ -2064,6 +2126,7 @@ class SpectraApp:
             "status": self.status_msg,
             "protocol": self.client.protocol,
             "version": __version__,
+            "platform": sys.platform,
             "config_dir": CONFIG_DIR,
             "profiles": self.list_profiles(),
             "last_profile": self.config.get("last_profile"),

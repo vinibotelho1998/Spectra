@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import ctypes
 import subprocess
+import os
+import sys
+import hashlib
 from ctypes import wintypes
 
 from .admin import SAIDA_CONSOLE
@@ -53,9 +56,11 @@ PROTEGIDOS = {"openrgb", "python", "pythonw"}
 # o caminho do executavel precisa ter uma das marcas do fabricante.
 CONFIRMA_CAMINHO = {"gcc": ("gigabyte",), "viper": ("patriot", "rgb")}
 
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-kernel32.CreateMutexW.restype = wintypes.HANDLE
-kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+kernel32 = None
+if sys.platform == "win32":
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
 
 ERROR_ALREADY_EXISTS = 183
 _mutex = None
@@ -69,6 +74,21 @@ def acquire_single_instance(name: str = "Global\\Spectra_SingleInstance") -> boo
     viver, e o Windows o libera sozinho no encerramento, mesmo abrupto.
     """
     global _mutex
+    if sys.platform != "win32":
+        import fcntl
+        if _mutex is not None:
+            return True
+        directory = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "spectra")
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        filename = hashlib.sha256(name.encode()).hexdigest() + ".lock"
+        fd = os.open(os.path.join(directory, filename), os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return False
+        _mutex = fd
+        return True
     _mutex = kernel32.CreateMutexW(None, False, name)
     if not _mutex:
         return True
@@ -81,6 +101,8 @@ def focus_existing_window(title: str = "Spectra") -> bool:
     E o que faz o segundo clique no atalho parecer que abriu o programa, em
     vez de nao fazer nada.
     """
+    if sys.platform != "win32":
+        return False
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     achou = []
 
@@ -138,6 +160,8 @@ def scan() -> list:
     Casa por nome exato e por prefixo, porque varios fabricantes sufixam o
     executavel com versao.
     """
+    if sys.platform != "win32":
+        return []
     achados = []
     for pid, base, nome in _listar_processos():
         if base in PROTEGIDOS:
@@ -192,6 +216,8 @@ def minimize_openrgb() -> bool:
     navegador aberto na pagina do projeto ou uma pasta chamada OpenRGB
     tambem eram minimizados a cada abertura do Spectra.
     """
+    if sys.platform != "win32":
+        return False
     pids = {pid for pid, base, _nome in _listar_processos() if base == "openrgb"}
     if not pids:
         return False

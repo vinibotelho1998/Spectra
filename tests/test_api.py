@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import threading
 import time
 import types
@@ -120,6 +121,9 @@ def _sem_nada_de_verdade(monkeypatch):
     monkeypatch.setattr(app_mod, "ScreenSource", FonteQueFalha)
     monkeypatch.setattr(app_mod, "SensorSource", FonteQueFalha)
     monkeypatch.setattr(app_mod, "OPENRGB_CANDIDATES", [])
+    # No Linux o executavel tambem e procurado no PATH. A suite nao deve
+    # descobrir nem iniciar a instalacao real da maquina de desenvolvimento.
+    monkeypatch.setattr(app_mod.shutil, "which", lambda *_a, **_k: None)
     # nem a sondagem da porta: com o OpenRGB aberto na maquina, ela o achava
     monkeypatch.setattr(app_mod, "_port_open", lambda *a, **k: False)
     for nome, valor in (("tarefa_existe", False), ("rodar_tarefa", False),
@@ -1223,9 +1227,12 @@ class TestFonteQueNaoEntrega:
         r = spectra.apply_preset("termometro")
         assert r["ok"] is True
         assert r["falhou"], "o termometro ficaria azul parado sem aviso"
-        assert str(tmp_path / "vendor") in r["falhou"][0]
+        if sys.platform == "win32":
+            assert str(tmp_path / "vendor") in r["falhou"][0]
+        else:
+            assert "temperatura" in r["falhou"][0]
         lid = spectra.renderer.layers[0].id
-        assert "sem temperatura" in spectra.state()["avisos"][lid]
+        assert "temperatura" in spectra.state()["avisos"][lid]
 
     def test_preset_de_uso_da_cpu_funciona_sem_dll(self, spectra, monkeypatch):
         monkeypatch.setattr(app_mod, "SensorSource", SensoresSemDll)
@@ -1365,8 +1372,9 @@ class TestMotivoDaConexao:
         assert st["motivo_conexao"] == "recusada"
 
     def test_caminho_do_openrgb_informado(self, spectra, tmp_path):
-        exe = tmp_path / "OpenRGB.exe"
+        exe = tmp_path / ("OpenRGB.exe" if sys.platform == "win32" else "openrgb")
         exe.write_bytes(b"")
+        exe.chmod(0o755)
         assert spectra.set_openrgb_exe(f'"{exe}"')["ok"] is True
         assert spectra._openrgb_exe() == str(exe)
 
@@ -1920,6 +1928,7 @@ class Windows:
                             types.SimpleNamespace(Popen=popen))
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="partida elevada por tarefas do Windows")
 class TestPartidaDoOpenRGB:
     """Subir o servidor gastando o menor numero de avisos do Windows."""
 
@@ -2020,6 +2029,7 @@ class TestEsperaDoServidor:
         assert spectra.ensure_openrgb(wait=30.0) is False
         assert sem_espera.esperas == []
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="consulta de processo pelo Windows")
     def test_openrgb_abrindo_nao_ganha_um_segundo(self, spectra, monkeypatch,
                                                   sem_espera):
         # no logon a tarefa antiga ja tinha aberto um, que leva uns cinco
@@ -2032,6 +2042,7 @@ class TestEsperaDoServidor:
         assert spectra.ensure_openrgb(wait=30.0) is True
         assert sem_espera.esperas == [0.5]
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="consulta de processo pelo Windows")
     def test_openrgb_abrindo_que_nunca_responde(self, spectra, monkeypatch):
         from spectra.core import admin
         self._porta(monkeypatch, [False])
@@ -2059,6 +2070,7 @@ class TestEsperaDoServidor:
         assert subidas == [1]
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="reparo por tarefa agendada do Windows")
 class TestReparoDaElevacao:
 
     @pytest.fixture
@@ -2155,6 +2167,7 @@ def _app_novo(monkeypatch, devices):
 
 class TestConexaoCompleta:
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="elevacao do OpenRGB no Windows")
     @pytest.mark.parametrize("reconexao", [False, True])
     def test_elevacao_conta_a_ram_da_lista_recem_carregada(
             self, spectra, monkeypatch, reconexao):
@@ -2502,6 +2515,7 @@ class TestAvisosDeSensor:
                              "params": {"sensor": sensor}}])
         return spectra._avisos_das_camadas().get("t")
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="LibreHardwareMonitor e especifico do Windows")
     def test_dll_presente_que_nao_abriu_mostra_o_erro(self, spectra, tmp_path):
         dll = tmp_path / "LibreHardwareMonitorLib.dll"
         dll.write_bytes(b"")
@@ -2512,10 +2526,11 @@ class TestAvisosDeSensor:
     def test_maquina_sem_a_leitura_diz_qual_falta(self, spectra, tmp_path):
         spectra.sensors = SensoresLigados(str(tmp_path / "x.dll"), lhm_ok=True,
                                           available=["cpu_temp", "cpu_load"])
-        assert self._aviso(spectra, "gpu_load") == (
+        assert self._aviso(spectra, "gpu_load").startswith(
             "esta maquina nao informa uso da GPU")
         assert self._aviso(spectra, "cpu_temp") is None
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="LibreHardwareMonitor e especifico do Windows")
     def test_antes_da_primeira_leitura_vale_o_que_a_biblioteca_le(
             self, spectra, tmp_path):
         spectra.sensors = SensoresLigados(str(tmp_path / "x.dll"), lhm_ok=True)
@@ -3394,6 +3409,7 @@ class TestRecuperacaoNaAbertura:
         monkeypatch.setattr(b, "_esperar_porta", lambda wait: True)
         return b, rodando, chamadas
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="recuperacao automatica de processo Windows")
     def test_sdk_travado_reinicia_uma_vez_e_restaura_a_cena(
             self, spectra, monkeypatch, tmp_path):
         b, rodando, chamadas = self._servidor_travado(spectra, monkeypatch, tmp_path)
@@ -3412,6 +3428,7 @@ class TestRecuperacaoNaAbertura:
         finally:
             b.renderer.stop()
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="recuperacao automatica de processo Windows")
     def test_instancia_que_nao_abriu_a_porta_tambem_e_recuperada(
             self, spectra, monkeypatch, tmp_path):
         b, rodando, chamadas = self._servidor_travado(spectra, monkeypatch, tmp_path)
@@ -3425,6 +3442,7 @@ class TestRecuperacaoNaAbertura:
         finally:
             b.renderer.stop()
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="recuperacao automatica de processo Windows")
     def test_segunda_falha_nao_reinicia_sem_fim(self, spectra, monkeypatch,
                                                tmp_path):
         b, rodando, chamadas = self._servidor_travado(spectra, monkeypatch, tmp_path)
@@ -3475,6 +3493,7 @@ class TestRecuperacaoNaAbertura:
         assert b._recuperar_openrgb_inicial(True) is False
         assert chamadas == []
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="tarefa agendada do Windows")
     def test_servidor_elevado_pode_ser_encerrado_pela_propria_tarefa(
             self, spectra, monkeypatch, tmp_path):
         from spectra.core import admin

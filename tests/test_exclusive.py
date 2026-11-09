@@ -13,6 +13,7 @@ import pytest
 
 exclusive = pytest.importorskip("spectra.core.exclusive",
                                 reason="modulo so existe no Windows")
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="testa APIs de processos e janelas do Windows")
 
 
 def _console_falso(monkeypatch, saida: bytes):

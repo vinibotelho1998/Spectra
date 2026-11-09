@@ -23,6 +23,10 @@ from spectra.sources.sensors import SensorSource, _LhmBackend
 
 class TestAudio:
 
+    @pytest.fixture(autouse=True)
+    def plataforma_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
+
     def test_parar_espera_o_laco_de_decaimento(self):
         # vivo depois do stop, o laco faria o start seguinte achar que a
         # captura continuava de pe, ou somaria dois lacos decaindo a batida
@@ -182,6 +186,10 @@ def _rodar(fonte, camera):
 
 
 class TestTela:
+
+    @pytest.fixture(autouse=True)
+    def plataforma_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
 
     def test_captura_que_morreu_nao_fica_marcada_como_ativa(self):
         s = ScreenSource(ScreenState())
@@ -450,6 +458,10 @@ class TestAnaliseDeAudio:
 
 class TestDispositivoDeAudio:
 
+    @pytest.fixture(autouse=True)
+    def plataforma_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
+
     def _biblioteca(self, monkeypatch, saida, loopbacks, erro_na_lista=None):
         abertos = []
         terminados = []
@@ -679,6 +691,10 @@ class UmaVolta:
 
 class TestFonteDeSensores:
 
+    @pytest.fixture(autouse=True)
+    def plataforma_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
+
     def test_sem_dll_segue_com_uso_de_cpu_e_ram(self, monkeypatch, tmp_path):
         _psutil_falso(monkeypatch)
         st = SensorState()
@@ -825,6 +841,10 @@ class TestPonteComABiblioteca:
 
 class TestCapturaQueQuebra:
 
+    @pytest.fixture(autouse=True)
+    def plataforma_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
+
     def test_erro_da_camera_encerra_a_leitura_com_o_motivo(self):
         class CameraQuebrada:
             is_capturing = True
@@ -859,3 +879,178 @@ class TestCapturaQueQuebra:
         assert "pyaudiowpatch indisponivel" in a.error
         devs, erro = AudioSource.list_devices()
         assert devs == [] and erro
+
+
+class TestFontesLinux:
+    def test_lista_apenas_monitores_de_audio(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        loop = types.SimpleNamespace(name="Saida", channels=2, isloopback=True)
+        mic = types.SimpleNamespace(name="Microfone", channels=1, isloopback=False)
+        monkeypatch.setitem(sys.modules, "soundcard", types.SimpleNamespace(
+            all_microphones=lambda include_loopback: [mic, loop]))
+        devices, error = AudioSource.list_devices()
+        assert error is None
+        assert [d["name"] for d in devices] == ["Saida"]
+        assert devices[0]["channels"] == 2
+
+    def test_abre_audio_com_contagem_inteira_de_canais(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        opened = []
+        class Recorder:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def record(self, numframes):
+                time.sleep(.01)
+                return np.zeros((numframes, 2), dtype=np.float32)
+        class Monitor:
+            name = "Saida"
+            channels = 2
+            isloopback = True
+            def recorder(self, **kwargs):
+                opened.append(kwargs)
+                return Recorder()
+        monitor = Monitor()
+        monkeypatch.setitem(sys.modules, "soundcard", types.SimpleNamespace(
+            all_microphones=lambda include_loopback: [monitor]))
+        source = AudioSource(AudioState(), device_name="Saida")
+        try:
+            assert source.start(), source.error
+            assert opened[0]["channels"] == 2
+            assert source.running
+        finally:
+            source.stop()
+        assert not source.running
+
+    def test_audio_padrao_usa_monitor_da_saida_exata(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        opened = []
+        class Recorder:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def record(self, numframes):
+                time.sleep(.01)
+                return np.zeros((numframes, 2), dtype=np.float32)
+        class Monitor:
+            channels = 2
+            isloopback = True
+            def __init__(self, id):
+                self.id = self.name = id
+            def recorder(self, **kwargs):
+                opened.append(self.id)
+                return Recorder()
+        monitors = [Monitor("saida-extra.monitor"), Monitor("saida.monitor")]
+        monkeypatch.setitem(sys.modules, "soundcard", types.SimpleNamespace(
+            all_microphones=lambda include_loopback: monitors,
+            default_speaker=lambda: types.SimpleNamespace(id="saida")))
+        source = AudioSource(AudioState())
+        try:
+            assert source.start(), source.error
+            assert opened == ["saida.monitor"]
+        finally:
+            source.stop()
+
+    def test_audio_padrao_sem_monitor_nao_escolhe_outro(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monitor = types.SimpleNamespace(id="outra.monitor", isloopback=True)
+        monkeypatch.setitem(sys.modules, "soundcard", types.SimpleNamespace(
+            all_microphones=lambda include_loopback: [monitor],
+            default_speaker=lambda: types.SimpleNamespace(id="saida")))
+        source = AudioSource(AudioState())
+        assert not source.start()
+        assert "monitor" in source.error
+
+    def test_audio_escolhido_ausente_nao_troca_para_outro(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setitem(sys.modules, "soundcard", types.SimpleNamespace(
+            all_microphones=lambda include_loopback: []))
+        source = AudioSource(AudioState(), device_name="Fone")
+        assert not source.start()
+        assert "Fone" in source.error
+
+    def test_lista_monitores_individuais(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        class FakeCapture:
+            monitors = [{"width": 300, "height": 100}, {"width": 100, "height": 100}, {"width": 200, "height": 100}]
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+        monkeypatch.setitem(sys.modules, "mss", types.SimpleNamespace(mss=FakeCapture))
+        devices, error = ScreenSource.list_outputs()
+        assert error is None
+        assert [d["index"] for d in devices] == [0, 1]
+        assert "200x100" in devices[1]["name"]
+
+
+class TestWayland:
+    def test_seletor_portal_em_vez_de_xwayland(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        devices, error = ScreenSource.list_outputs()
+        assert error is None
+        assert "portal" in devices[0]["name"]
+
+    def test_captura_e_encerramento(self, monkeypatch):
+        import spectra.sources.screen as screen
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        class Portal:
+            def __init__(self, stop, grid, fps):
+                self.stop = stop
+            def run(self, frame, ready):
+                ready()
+                frame(np.full((36, 64, 3), (255, 0, 0), dtype=np.uint8))
+                self.stop.wait(1)
+        monkeypatch.setattr(screen, "_PortalCapture", Portal)
+        state = ScreenState()
+        source = ScreenSource(state)
+        assert source.start()
+        deadline = time.monotonic() + 1
+        while state.average[0] < 0.9 and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert state.enabled
+        assert np.allclose(state.average, [1, 0, 0])
+        source.stop()
+        assert not state.enabled and not source.running
+
+    def test_recusa_de_permissao_nao_ativa_fonte(self, monkeypatch):
+        import spectra.sources.screen as screen
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+        class Portal:
+            def __init__(self, *args): pass
+            def run(self, frame, ready): raise screen._PortalDenied("compartilhamento recusado")
+        monkeypatch.setattr(screen, "_PortalCapture", Portal)
+        state = ScreenState()
+        source = ScreenSource(state)
+        source.start()
+        source._thread.join(1)
+        assert not state.enabled and not source.running
+        assert "recusado" in source.error
+        assert not source.start()
+
+    def test_assinaturas_portal_com_glib(self):
+        pytest.importorskip('gi')
+        import threading
+        from spectra.sources.screen import _PortalCapture
+        portal = _PortalCapture(threading.Event(), (36, 64), 30)
+        class Bus:
+            def call_sync(self, *args): return None
+        portal.Gio = types.SimpleNamespace(
+            BusType=types.SimpleNamespace(SESSION=1),
+            DBusCallFlags=types.SimpleNamespace(NONE=0),
+            bus_get_sync=lambda *args: Bus())
+        signatures = []
+        def request(method, args):
+            variant = args('spectra_token')
+            signatures.append((method, variant.get_type_string(), variant.unpack()))
+            if method == 'CreateSession':
+                return {'session_handle': '/org/freedesktop/portal/desktop/session/1_2/spectra_test'}
+            if method == 'SelectSources':
+                return {}
+            raise RuntimeError('fim do teste')
+        portal._request = request
+        with pytest.raises(RuntimeError, match='fim do teste'):
+            portal.run(lambda f: None, lambda: None)
+        assert [v[1] for v in signatures] == ['(a{sv})', '(oa{sv})', '(osa{sv})']
+        assert signatures[0][2][0]['handle_token'] == 'spectra_token'

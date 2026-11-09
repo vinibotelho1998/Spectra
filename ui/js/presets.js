@@ -659,7 +659,10 @@ function renderSemConexao(box, st) {
   // remontar a cada estado apagaria o caminho que a pessoa esta digitando
   if (box.dataset.motivo === motivo && box.querySelector(".setup.err")) return;
   const textos = {
-    nao_instalado: `O OpenRGB nao foi encontrado nesta maquina. Instale pelo
+    nao_instalado: st.platform === "linux"
+      ? `O OpenRGB nao foi encontrado. Instale o OpenRGB e coloque-o no PATH,
+         ou informe abaixo o caminho do executavel ou AppImage.`
+      : `O OpenRGB nao foi encontrado nesta maquina. Instale pelo
       <code>openrgb.org</code> em <code>C:\\Program Files</code>, ou diga abaixo
       onde esta o <code>OpenRGB.exe</code>, se usa a versao portatil.`,
     partida_desligada: `O servidor do OpenRGB nao esta no ar, e a partida
@@ -687,7 +690,7 @@ function renderSemConexao(box, st) {
       camada de hardware: sem ele no ar, nenhum LED e alcancado.</p>
       ${motivo === "nao_instalado" ? `
       <div class="row">
-        <input type="text" id="bannerExe" placeholder="C:\\Programas\\OpenRGB\\OpenRGB.exe">
+        <input type="text" id="bannerExe" placeholder="${st.platform === "linux" ? "/usr/bin/openrgb" : "C:\\Programas\\OpenRGB\\OpenRGB.exe"}">
         <button class="btn sm" id="bannerUsarExe">Usar este</button>
       </div>` : ""}
       ${st.erro_conexao ? `<p class="note">Detalhe: ${esc(st.erro_conexao)}</p>` : ""}

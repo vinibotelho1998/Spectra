@@ -9,8 +9,7 @@ import types
 
 import pytest
 
-akko = pytest.importorskip("spectra.core.akko",
-                           reason="modulo so existe no Windows")
+akko = pytest.importorskip("spectra.core.akko")
 
 
 def soma_confere(pacote, fim):
@@ -104,6 +103,13 @@ class TestMatriz:
 
     def test_matriz_fecha_nos_126(self):
         assert akko.LINHAS * akko.COLUNAS == akko.LEDS == 126
+
+
+@pytest.fixture(autouse=True)
+def backend_windows_para_testes_existentes(monkeypatch, request):
+    if request.cls and request.cls.__name__ in {"TestQueda", "TestEnvio", "TestAbrir"}:
+        monkeypatch.setattr(akko, "_WINDOWS", True)
+        monkeypatch.setattr(akko.ctypes, "get_last_error", lambda: 5, raising=False)
 
 
 class TestQueda:
@@ -342,3 +348,102 @@ class TestAbrir:
         k = akko.AkkoKeyboard()
         assert k.abrir() is False
         assert "SetupDi" in k.erro
+
+
+class TestLinuxHid:
+    def test_abre_somente_interface_vendor_e_envia_feature_report(self, monkeypatch):
+        import sys
+        reports = []
+        closed = []
+        class Device:
+            def open_path(self, path):
+                assert path == b"/dev/hidraw9"
+            def send_feature_report(self, data):
+                reports.append(data)
+                return len(data)
+            def close(self):
+                closed.append(True)
+        hid = types.SimpleNamespace(
+            enumerate=lambda vid, pid: [
+                {"usage_page": 1, "usage": 6, "path": b"/dev/hidraw8"},
+                {"usage_page": 0xffff, "usage": 2, "path": b"/dev/hidraw9"}],
+            device=Device)
+        monkeypatch.setitem(sys.modules, "hidraw", hid)
+        monkeypatch.setattr(akko, "_WINDOWS", False)
+        kb = akko.AkkoKeyboard()
+        assert kb.abrir()
+        assert kb.to_json()["path"] == "/dev/hidraw9"
+        assert kb.set_cor(1, 2, 3)
+        assert reports == [b"\x00" + akko.monta(1, 4, 4, 8, 1, 2, 3)]
+        kb.fechar()
+        assert closed == [True]
+
+    def test_sem_permissao_retorna_erro(self, monkeypatch):
+        import sys
+        class Device:
+            def open_path(self, path):
+                raise OSError("permission denied")
+            def close(self):
+                pass
+        monkeypatch.setitem(sys.modules, "hidraw", types.SimpleNamespace(
+            enumerate=lambda *args: [{"usage_page": 0xffff, "usage": 2, "path": b"x"}],
+            device=Device))
+        monkeypatch.setattr(akko, "_WINDOWS", False)
+        kb = akko.AkkoKeyboard()
+        assert not kb.abrir()
+        assert "permission denied" in kb.erro
+
+    def test_interface_sem_descritor_nao_e_aberta(self, monkeypatch):
+        import sys
+        monkeypatch.setattr(akko, "_WINDOWS", False)
+        monkeypatch.setitem(sys.modules, "hidraw", types.SimpleNamespace(
+            enumerate=lambda *args: [{"usage_page": 0, "usage": 0, "path": b"x"}],
+            device=lambda: pytest.fail("colecao nao identificada nao deve ser aberta")))
+        kb = akko.AkkoKeyboard()
+        assert not kb.abrir()
+        assert "permissoes hidraw" in kb.erro
+
+    def test_envio_curto_e_desconexao_permite_reconectar(self, monkeypatch):
+        import sys
+        monkeypatch.setattr(akko, "_WINDOWS", False)
+        handles = []
+        class Device:
+            def __init__(self):
+                self.closed = False
+                handles.append(self)
+            def open_path(self, path):
+                pass
+            def send_feature_report(self, data):
+                return 0 if len(handles) == 1 else len(data)
+            def close(self):
+                self.closed = True
+        monkeypatch.setitem(sys.modules, "hidraw", types.SimpleNamespace(
+            enumerate=lambda *args: [{"usage_page": akko.USAGE_PAGE,
+                                      "usage": akko.USAGE, "path": b"x"}],
+            device=Device))
+        kb = akko.AkkoKeyboard()
+        assert kb.abrir()
+        for _ in range(akko.FALHAS_MAX):
+            assert not kb._envia(bytes(64))
+        assert not kb.conectado and handles[0].closed
+        assert kb.abrir()
+        assert kb._envia(bytes(64))
+        kb.fechar()
+        assert handles[1].closed
+
+    def test_fecha_handle_se_abertura_falha(self, monkeypatch):
+        import sys
+        monkeypatch.setattr(akko, "_WINDOWS", False)
+        closed = []
+        class Device:
+            def open_path(self, path):
+                raise OSError("dispositivo removido")
+            def close(self):
+                closed.append(True)
+        monkeypatch.setitem(sys.modules, "hidraw", types.SimpleNamespace(
+            enumerate=lambda *args: [{"usage_page": akko.USAGE_PAGE,
+                                      "usage": akko.USAGE, "path": b"x"}],
+            device=Device))
+        kb = akko.AkkoKeyboard()
+        assert not kb.abrir()
+        assert closed == [True]

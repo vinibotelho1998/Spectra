@@ -2111,7 +2111,7 @@ async function renderSources() {
     // ela, vai o caminho inteiro: no app instalado a vendor/ do proprio app
     // fica escondida em _internal, e "vendor/" sozinho nao levava a lugar
     // nenhum.
-    if (!s.lhm && !(s.dll_present && !s.running)) {
+    if (!(S.state.platform || "").startsWith("linux") && !s.lhm && !(s.dll_present && !s.running)) {
       card.insertAdjacentHTML("beforeend", s.dll_present === false
         ? `<p class="src-err">Temperaturas indisponiveis: falta a
            LibreHardwareMonitorLib.dll. Coloque o arquivo em

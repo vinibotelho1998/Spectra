@@ -8,6 +8,7 @@ de verdade so pelo menu da bandeja.
 from __future__ import annotations
 
 import os
+import sys
 import threading
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,6 +22,22 @@ def sessao_encerrando() -> bool:
         import ctypes
         SM_SHUTTINGDOWN = 0x2000
         return bool(ctypes.windll.user32.GetSystemMetrics(SM_SHUTTINGDOWN))
+    except Exception:
+        return False
+
+
+def _status_notifier_disponivel():
+    """Verifica se a sessao tem um host de bandeja StatusNotifier."""
+    try:
+        from gi.repository import Gio, GLib
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        result = bus.call_sync("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher",
+                               "org.freedesktop.DBus.Properties", "Get",
+                               GLib.Variant("(ss)", ("org.kde.StatusNotifierWatcher",
+                                                     "IsStatusNotifierHostRegistered")),
+                               GLib.VariantType.new("(v)"),
+                               Gio.DBusCallFlags.NONE, 1500, None)
+        return bool(result.unpack()[0])
     except Exception:
         return False
 
@@ -40,6 +57,7 @@ class Tray:
         self.icon = None
         self.quitting = False
         self._thread = None
+        self._gtk_detached = False
 
     def _mostrar(self, *_):
         try:
@@ -80,7 +98,8 @@ class Tray:
         fechamento nessa hora fazia o Spectra aparecer como programa que
         impede o desligamento, e os LEDs nao passavam pelo apagar do fim.
         """
-        if self.quitting or not self.icon or sessao_encerrando():
+        if (self.quitting or not self.icon or sessao_encerrando()
+                or (self._gtk_detached and not _status_notifier_disponivel())):
             self.quitting = True
             return True
         try:
@@ -128,6 +147,8 @@ class Tray:
         self.quitting = True
         try:
             if self.icon:
+                if self._gtk_detached:
+                    self.icon.visible = False
                 self.icon.stop()
         except Exception:
             pass
@@ -145,11 +166,27 @@ class Tray:
         Devolve False quando a bandeja nao esta disponivel, caso em que o app
         segue sem ela em vez de nao abrir.
         """
+        wayland = (sys.platform.startswith("linux") and
+                   (os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+                    or bool(os.environ.get("WAYLAND_DISPLAY"))))
+        if wayland and not _status_notifier_disponivel():
+            return False
+        # KDE Wayland usa StatusNotifierItem, nao o icone XEmbed do X11.
+        # pystray escolhe o backend no primeiro import; definir so durante o
+        # import evita alterar o ambiente herdado pelos processos filhos.
+        old_backend = os.environ.get("PYSTRAY_BACKEND")
+        if wayland and old_backend is None:
+            os.environ["PYSTRAY_BACKEND"] = "appindicator"
         try:
             import pystray
             from PIL import Image
+            if wayland and pystray.Icon.__module__ != "pystray._appindicator":
+                return False
         except Exception:
             return False
+        finally:
+            if wayland and old_backend is None:
+                os.environ.pop("PYSTRAY_BACKEND", None)
         try:
             img = Image.open(ICONE_PNG if os.path.isfile(ICONE_PNG) else ICONE)
         except Exception:
@@ -163,16 +200,42 @@ class Tray:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Sair", self._sair),
         )
-        self.icon = pystray.Icon("spectra", img, "Spectra", menu)
-        self._thread = threading.Thread(target=self.icon.run, daemon=True,
-                                        name="spectra-tray")
-        self._thread.start()
+        try:
+            self.icon = pystray.Icon("spectra", img, "Spectra", menu)
+        except Exception:
+            self.icon = None
+            return False
+        ready = threading.Event()
+
+        def setup(icon):
+            icon.visible = True
+            ready.set()
+
+        if wayland:
+            # GTK/WebKit pertence a thread principal; o pywebview iniciara o
+            # loop GLib, portanto nao crie um segundo loop em outra thread.
+            try:
+                self.icon.run_detached(setup=setup)
+                self._gtk_detached = True
+            except Exception:
+                self.icon = None
+                return False
+        else:
+            self._thread = threading.Thread(target=self.icon.run, kwargs={"setup": setup}, daemon=True,
+                                            name="spectra-tray")
+            self._thread.start()
+        if not ready.wait(2):
+            self.stop()
+            self.icon = None
+            return False
         return True
 
     def stop(self):
         """Tira o icone da bandeja."""
         try:
             if self.icon:
+                if self._gtk_detached:
+                    self.icon.visible = False
                 self.icon.stop()
         except Exception:
             pass
@@ -184,7 +247,7 @@ def set_window_icon(titulo: str = "Spectra") -> bool:
     A janela nativa vem do webview e nao expoe o icone, entao ele e
     colocado por mensagem do Windows depois que a janela ja existe.
     """
-    if not os.path.isfile(ICONE):
+    if sys.platform != "win32" or not os.path.isfile(ICONE):
         return False
     try:
         import ctypes

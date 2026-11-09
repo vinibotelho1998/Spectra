@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import io
 import json
+import os
 import threading
 import types
 from email.message import Message
@@ -12,6 +13,83 @@ from email.message import Message
 import pytest
 
 from spectra import server
+
+
+def _http_pipes(app, raw_request):
+    """Exercita o parser e a resposta HTTP usando pipes locais."""
+    incoming, sender = os.pipe()
+    receiver, outgoing = os.pipe()
+
+    class Endpoint:
+        def __init__(self, read_fd, write_fd):
+            self.read_fd, self.write_fd = read_fd, write_fd
+
+        def makefile(self, mode, buffering=-1):
+            fd = self.read_fd if "r" in mode else self.write_fd
+            return os.fdopen(os.dup(fd), mode, buffering=buffering)
+
+        def settimeout(self, _timeout):
+            pass
+
+        def sendall(self, data):
+            remaining = memoryview(data)
+            while remaining:
+                remaining = remaining[os.write(self.write_fd, remaining):]
+
+        def close(self):
+            os.close(self.read_fd)
+            os.close(self.write_fd)
+
+    client, peer = Endpoint(receiver, sender), Endpoint(incoming, outgoing)
+    handler = type("HandlerDeTeste", (server.Handler,), {"app": app})
+    errors = []
+
+    def atender():
+        try:
+            handler(peer, ("127.0.0.1", 12345), types.SimpleNamespace())
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            peer.close()
+
+    thread = threading.Thread(target=atender, daemon=True)
+    thread.start()
+    try:
+        os.write(client.write_fd, raw_request)
+        response = http.client.HTTPResponse(client)
+        response.begin()
+        return response.status, response.getheaders(), response.read()
+    finally:
+        client.close()
+        thread.join(2)
+        assert not thread.is_alive()
+        if errors:
+            raise errors[0]
+
+
+def test_http_real_serve_pagina_estado_e_valida_post():
+    chamadas = []
+    app = types.SimpleNamespace(state=lambda: {"id": 7}, renderer=object(),
+                                reset_layout=lambda: chamadas.append("reset"))
+    base = b"Host: 127.0.0.1:7311\r\nConnection: close\r\n"
+
+    status, headers, body = _http_pipes(app, b"GET / HTTP/1.1\r\n" + base + b"\r\n")
+    assert status == 200
+    assert b"<html" in body.lower()
+    assert dict(headers)["X-Content-Type-Options"] == "nosniff"
+
+    status, _, body = _http_pipes(app, b"GET /api/state HTTP/1.1\r\n" + base + b"\r\n")
+    assert status == 200
+    assert json.loads(body) == {"id": 7}
+
+    post = b"POST /api/layout/reset HTTP/1.1\r\n" + base
+    status, _, _ = _http_pipes(app, post + b"Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+    assert status == 200
+    assert chamadas == ["reset"]
+
+    status, _, _ = _http_pipes(app, post + b"Origin: https://example.org\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+    assert status == 403
+    assert chamadas == ["reset"]
 
 
 def pedido(corpo=b"{}", caminho="/api/layout/reset", headers=None, motor=True):

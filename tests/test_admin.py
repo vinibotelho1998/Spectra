@@ -7,12 +7,14 @@ que so anotam o que seria pedido ao Windows.
 from __future__ import annotations
 
 import types
+import sys
 import xml.etree.ElementTree as ET
 
 import pytest
 
 admin = pytest.importorskip("spectra.core.admin",
                             reason="modulo so existe no Windows")
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="testa APIs e caminhos do Windows")
 
 NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
 

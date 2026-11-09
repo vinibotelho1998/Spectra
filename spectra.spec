@@ -1,18 +1,20 @@
+import sys
+
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 
 block_cipher = None
 
-hiddenimports = (
-    collect_submodules("clr_loader")
-    + collect_submodules("pythonnet")
-    + [
-        "pyaudiowpatch",
-        "pystray._win32",
-        "PIL._tkinter_finder",
-    ]
-)
-
-binaries = collect_dynamic_libs("clr_loader")
+if sys.platform == "win32":
+    hiddenimports = (
+        collect_submodules("clr_loader")
+        + collect_submodules("pythonnet")
+        + ["pyaudiowpatch", "pystray._win32", "PIL._tkinter_finder"]
+    )
+    binaries = collect_dynamic_libs("clr_loader")
+else:
+    # Backends dynamically selected by pywebview and pystray.
+    hiddenimports = ["webview.platforms.gtk", "pystray._xorg", "pystray._appindicator", "soundcard", "mss", "hidraw"]
+    binaries = []
 
 a = Analysis(
     ["run.py"],
@@ -50,7 +52,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="assets/spectra.ico",
+    icon="assets/spectra.ico" if sys.platform == "win32" else None,
 )
 
 coll = COLLECT(

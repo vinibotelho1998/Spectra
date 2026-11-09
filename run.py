@@ -143,14 +143,39 @@ def ligar_desligamento(window, tray) -> bool:
     return True
 
 
+def configurar_identidade_linux() -> bool:
+    """Identifica a janela pelo nome de spectra.desktop antes de iniciar GTK.
+
+    Em Wayland o compositor procura o icone na entrada desktop correspondente
+    ao app_id; o icone atribuido a uma janela GTK sozinho nao basta.
+    """
+    try:
+        import gi
+        gi.require_version("Gdk", "3.0")
+        from gi.repository import GLib, Gdk
+        GLib.set_prgname("spectra")
+        GLib.set_application_name("Spectra")
+        Gdk.set_program_class("spectra")
+        return True
+    except Exception as exc:
+        print(f"[spectra] nao consegui definir a identidade da janela: {exc}")
+        return False
+
+
 def run_window(url: str, app: SpectraApp, bandeja: bool = False) -> int:
+    def abrir_navegador():
+        webbrowser.open(url)
+        while True:
+            time.sleep(1)
+
+    if sys.platform.startswith("linux"):
+        configurar_identidade_linux()
+
     try:
         import webview
     except Exception as exc:
         print(f"[spectra] pywebview indisponivel ({exc}); abrindo no navegador")
-        webbrowser.open(url)
-        while True:
-            time.sleep(1)
+        return abrir_navegador()
 
     from spectra.tray import Tray, set_window_icon
 
@@ -166,23 +191,29 @@ def run_window(url: str, app: SpectraApp, bandeja: bool = False) -> int:
     if not tray.start():
         print("[spectra] bandeja indisponivel; fechar a janela vai encerrar")
 
-    window = webview.create_window(
-        TITULO, url, width=1420, height=900, min_size=(1060, 680),
-        background_color="#07090d", hidden=bool(bandeja and tray.icon))
-    tray.window = window
-    app.ao_mostrar_janela = tray._mostrar
-
-    window.events.closing += tray.ao_fechar
-    window.events.before_show += lambda window: ligar_desligamento(window, tray)
-    window.events.loaded += lambda: set_window_icon(TITULO)
-
     try:
-        webview.start(gui="edgechromium")
+        window = webview.create_window(
+            TITULO, url, width=1420, height=900, min_size=(1060, 680),
+            background_color="#07090d", hidden=bool(bandeja and tray.icon))
+        tray.window = window
+        app.ao_mostrar_janela = tray._mostrar
+
+        window.events.closing += tray.ao_fechar
+        if sys.platform == "win32":
+            window.events.before_show += lambda window: ligar_desligamento(window, tray)
+            window.events.loaded += lambda: set_window_icon(TITULO)
+
+        if sys.platform == "win32":
+            webview.start(gui="edgechromium")
+        else:
+            # GTK/WebKit e o backend nativo do pywebview no Linux.
+            from spectra.tray import ICONE_PNG
+            webview.start(gui="gtk", icon=ICONE_PNG)
     except Exception as exc:
         print(f"[spectra] falha ao abrir a janela ({exc}); abrindo no navegador")
-        webbrowser.open(url)
-        while True:
-            time.sleep(1)
+        tray.stop()
+        app.ao_mostrar_janela = None
+        return abrir_navegador()
     finally:
         tray.stop()
     return 0

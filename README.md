@@ -3,7 +3,7 @@
 [![Build installer](https://github.com/vinibotelho1998/Spectra/actions/workflows/release.yml/badge.svg)](https://github.com/vinibotelho1998/Spectra/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Controlador de RGB para Windows com motor de efeitos espacial próprio. Fala
+Controlador de RGB para Windows e Linux com motor de efeitos espacial próprio. Fala
 diretamente o protocolo do [OpenRGB](https://openrgb.org) como camada de
 hardware, e constrói por cima um motor de renderização, uma biblioteca com
 mais de cem efeitos e uma interface web local — tudo neste repositório, sem
@@ -25,6 +25,8 @@ animações que atravessam a largura de várias lâminas ao mesmo tempo.
 
 ## Como instalar
 
+### Windows
+
 **Opção rápida:** baixe o instalador mais recente na
 [aba Releases](../../releases/latest) e rode. O CI gera um instalador novo a
 cada push na `main`.
@@ -41,6 +43,73 @@ python -m venv .venv
 
 Requer Windows 10/11 e o [OpenRGB](https://openrgb.org) instalado (o Spectra
 sobe o servidor dele sozinho se encontrar em `C:\Program Files`).
+
+### Linux
+
+Instale o OpenRGB e permita que ele acesse seus dispositivos conforme as
+[instruções oficiais do OpenRGB](https://openrgb.org/). O Spectra conecta ao
+servidor SDK na porta 6742; inicie `openrgb --server` caso ele ainda não esteja
+em execução. A interface local usa a porta 7311.
+
+São necessários Python 3.12 ou mais recente com `venv` e `pip`, GTK 3, WebKitGTK e bindings Python
+GObject para a janela, além de PulseAudio ou PipeWire com compatibilidade
+PulseAudio para áudio. Em Debian/Ubuntu, por exemplo:
+
+```bash
+sudo apt install python3-venv python3-pip python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1 gir1.2-gstreamer-1.0 gstreamer1.0-pipewire libpulse0
+```
+
+Os nomes dos pacotes variam por distribuição. Use o Python da distribuição
+para que o ambiente virtual possa acessar os bindings GObject instalados pelo
+sistema. A partir do código-fonte:
+
+```bash
+git clone https://github.com/vinibotelho1998/Spectra.git
+cd Spectra
+./tools/install-linux.sh
+```
+
+O instalador cria `.venv` no repositório, instala as dependências Python e
+adiciona o comando `~/.local/bin/spectra` e uma entrada no menu do usuário. O
+repositório precisa permanecer no mesmo caminho. Também é possível executar
+`.venv/bin/python run.py --browser` para usar o navegador, ou `--headless`
+para executar sem janela. Para remover a instalação local, apague `.venv`,
+`~/.local/bin/spectra` e `~/.local/share/applications/spectra.desktop` (ou os
+respectivos caminhos XDG personalizados).
+
+A captura de áudio depende de uma fonte de monitor disponível no PulseAudio ou
+PipeWire. No X11 a captura de tela usa MSS; no Wayland ela usa o portal
+ScreenCast, PipeWire e GStreamer. O sistema pede que você escolha uma tela e
+autorize o compartilhamento a cada sessão de captura. A carga de GPU depende
+do driver AMD expor `gpu_busy_percent` ou do utilitário NVIDIA `nvidia-smi`;
+outros sensores dependem dos dados disponibilizados pelo sistema. No Wayland,
+a bandeja usa StatusNotifier e AppIndicator; no KDE Plasma ela permite ocultar
+a janela e reabri-la pelo ícone. É necessário o pacote AppIndicator ou Ayatana
+com seu typelib GObject (por exemplo, `gir1.2-ayatanaappindicator3-0.1` no
+Debian/Ubuntu), além de um desktop com host de bandeja. Se a bandeja não
+estiver disponível, fechar a janela encerra o Spectra.
+
+Para o teclado Akko suportado por HID direto (VID `3151`, PID `502d`),
+o usuário precisa ter acesso ao dispositivo hidraw. Em sistemas com udev e
+logind, crie `/etc/udev/rules.d/70-spectra-akko.rules` com:
+
+```udev
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3151", ATTRS{idProduct}=="502d", TAG+="uaccess"
+```
+
+Recarregue as regras com `sudo udevadm control --reload-rules` e reconecte o
+teclado. A regra `uaccess` concede acesso à sessão local ativa gerenciada pelo
+logind; em outros ambientes, configure uma regra de grupo apropriada à sua
+distribuição. Não é necessário executar o Spectra como root. Se a interface não
+for identificada ou a abertura for negada, confira a regra, a sessão ativa e as
+permissões do dispositivo `/dev/hidraw*`. O suporte HID no Linux precisa ser
+validado com o dispositivo físico.
+
+Para gerar uma pasta de distribuição no próprio Linux, instale PyInstaller no
+ambiente virtual e execute `.venv/bin/pyinstaller spectra.spec`. O resultado
+fica em `dist/Spectra`; as bibliotecas GTK/WebKit do sistema continuam sendo
+necessárias. A compilação deve ser feita no sistema de destino ou em um Linux
+compatível.
 
 ## O motor
 
@@ -224,7 +293,9 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
   O formato do comando de fluxo e o mapa de comandos vieram da documentação do
   [monsgeek-akko-linux](https://github.com/echtzeit-solutions/monsgeek-akko-linux),
   que reverteu essa mesma família de teclados.
-- **Temperaturas de CPU/GPU são opcionais.** Dependem de
+- **Temperaturas de CPU/GPU são opcionais.** No Linux, dependem dos sensores
+  expostos pelo sistema; a carga da GPU depende do driver AMD ou do
+  `nvidia-smi`. No Windows, temperaturas dependem de
   `LibreHardwareMonitorLib.dll` (não incluída — baixe em
   [github.com/LibreHardwareMonitor/LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)),
   procurada em `vendor/` dentro da pasta de configuração, que no app instalado
@@ -232,7 +303,7 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
   Sem ela, os efeitos de sensor funcionam com uso de CPU/RAM via `psutil`, e
   as temperaturas aparecem como indisponíveis — nunca inventadas; a aba Fontes
   e a vitrine dizem onde colocar o arquivo.
-- **RAM, SSD e GPU via SMBus/I²C exigem o OpenRGB elevado.** Sem privilégio
+- **RAM, SSD e GPU via SMBus/I²C no Windows exigem o OpenRGB elevado.** Sem privilégio
   administrativo o OpenRGB não abre o barramento (`Permission Denied, PawnIO
   initialization aborted` no log dele) e os pentes de memória simplesmente não
   aparecem na lista. O Spectra resolve isso sozinho: na primeira abertura
@@ -241,7 +312,10 @@ fabricante da placa. O assistente reduz isso ao mínimo de perguntas:
   conta aparece uma vez só. Se o servidor já estiver no ar sem privilégio, a
   aba Hardware mostra o aviso com o botão **Corrigir**, que registra a tarefa e
   reinicia o servidor elevado. O barramento também depende do driver
-  [PawnIO](https://pawnio.eu); faltando ele, o aviso diz isso.
+  [PawnIO](https://pawnio.eu); faltando ele, o aviso diz isso. No Linux,
+  o barramento precisa estar disponível e acessível ao usuário. Consulte
+  [SMBus Access do OpenRGB](https://gitlab.com/CalcProgrammer1/OpenRGB/-/blob/master/Documentation/SMBusAccess.md)
+  quando os módulos não aparecerem.
 
 ## Empacotamento
 
@@ -273,7 +347,7 @@ node --test tests/test_frontend.js
 conexão, recuperação de inicialização e API usam mocks, sem controlar os LEDs.
 As regressões da interface usam o executor de testes do Node.js, sem instalar
 dependências JavaScript.
-O workflow `Tests` valida pull requests; o workflow de release também executa
+O workflow `Tests` valida pull requests no Windows e no Linux; o workflow de release também executa
 a suíte antes de gerar o instalador.
 
 ## Ferramentas de diagnóstico

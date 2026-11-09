@@ -1,17 +1,56 @@
-"""Leitura de temperatura, carga e rotacao, via LibreHardwareMonitor.
+"""Leitura de temperatura, carga e rotacao.
 
-A biblioteca e .NET e entra por ponte CLR, entao depende de uma DLL que
-nao vem no repositorio. Sem ela, e sem privilegio de administrador para
-ler os sensores, a fonte simplesmente fica indisponivel e os efeitos que
-dependem dela aparecem marcados na interface.
+No Windows, usa LibreHardwareMonitor opcional via CLR. No Linux, psutil fornece
+CPU, memoria, temperaturas e fans quando disponiveis; a carga da GPU depende do
+arquivo gpu_busy_percent do driver AMD ou do nvidia-smi com driver NVIDIA.
+Os sensores disponiveis variam pelo dispositivo, driver e permissoes; outras
+GPUs podem nao expor carga. Quando ha varias GPUs, usa-se a maior carga lida.
 """
 
 from __future__ import annotations
 
+import glob
 import os
+import shutil
+import subprocess
 import sys
 import threading
 import time
+
+
+def _linux_gpu_load(drm_root="/sys/class/drm"):
+    """Maior carga disponível: amdgpu no sysfs e NVIDIA via nvidia-smi.
+
+    Depende do driver expor gpu_busy_percent ou da ferramenta NVIDIA instalada;
+    outras GPUs e ambientes sem permissão podem não fornecer carga. Nenhuma
+    configuração é alterada. GPUs múltiplas são agregadas pelo maior valor.
+    """
+    values = []
+    for path in glob.glob(os.path.join(drm_root, "card[0-9]*", "device", "gpu_busy_percent")):
+        try:
+            with open(path, encoding="ascii") as f:
+                value = float(f.read(64).strip())
+            if 0 <= value <= 100:
+                values.append(value)
+        except (OSError, ValueError, UnicodeError):
+            continue
+    executable = shutil.which("nvidia-smi")
+    if executable:
+        try:
+            result = subprocess.run(
+                [executable, "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=0.75, check=True,
+            )
+            for line in result.stdout.splitlines():
+                try:
+                    value = float(line.strip())
+                    if 0 <= value <= 100:
+                        values.append(value)
+                except ValueError:
+                    continue
+        except (OSError, subprocess.SubprocessError, UnicodeError):
+            pass
+    return max(values) if values else None
 
 
 def _vendor_dll_path() -> str:
@@ -131,6 +170,7 @@ class SensorSource:
         self.lhm = _LhmBackend(dll_path)
         self.lhm_ok = False
         self.psutil_ok = False
+        self.linux_sensors = sys.platform.startswith("linux")
         self._thread = None
         self._stop = threading.Event()
         self.error = None
@@ -150,7 +190,7 @@ class SensorSource:
             self.psutil_ok = True
         except Exception as exc:
             self.error = str(exc)
-        self.lhm_ok = self.lhm.open()
+        self.lhm_ok = False if self.linux_sensors else self.lhm.open()
         if not self.lhm_ok and not self.psutil_ok:
             self.error = self.lhm.error or self.error
             return False
@@ -193,6 +233,35 @@ class SensorSource:
                     got.update({"cpu_load", "ram_load"})
                 except Exception:
                     pass
+            if self.linux_sensors and self.psutil_ok:
+                try:
+                    import psutil
+                    temperatures = psutil.sensors_temperatures()
+                    for chip, entries in temperatures.items():
+                        for entry in entries:
+                            name = (chip + " " + entry.label).lower()
+                            if any(x in name for x in ("coretemp", "k10temp", "zenpower", "cpu", "tctl")):
+                                key = "cpu_temp"
+                            elif any(x in name for x in ("amdgpu", "nouveau", "nvidia", "gpu")):
+                                key = "gpu_temp"
+                            else:
+                                continue
+                            value = float(entry.current)
+                            if -20 < value < 150:
+                                setattr(s, key, max(getattr(s, key, value), value) if key in got else value)
+                                got.add(key)
+                    fans = psutil.sensors_fans()
+                    values = [float(f.current) for entries in fans.values() for f in entries if f.current is not None]
+                    if values:
+                        s.fan_rpm = max(values)
+                        got.add("fan_rpm")
+                except (AttributeError, OSError, ValueError):
+                    pass
+            if self.linux_sensors:
+                gpu_load = _linux_gpu_load()
+                if gpu_load is not None:
+                    s.gpu_load = gpu_load
+                    got.add("gpu_load")
             if self.lhm_ok:
                 d = self.lhm.read()
                 s.extra = d

@@ -14,6 +14,7 @@ baixa mal acenderia os LEDs.
 from __future__ import annotations
 
 import threading
+import sys
 import time
 
 import numpy as np
@@ -57,6 +58,8 @@ class AudioSource:
     @staticmethod
     def list_devices():
         """Lista os dispositivos de loopback disponiveis."""
+        if sys.platform.startswith("linux"):
+            return AudioSource._linux_devices()
         try:
             import pyaudiowpatch as pa
         except Exception as exc:
@@ -79,6 +82,81 @@ class AudioSource:
         finally:
             p.terminate()
         return out, None
+
+    @staticmethod
+    def _linux_devices():
+        try:
+            import soundcard as sc
+            devices = [m for m in sc.all_microphones(include_loopback=True)
+                       if m.isloopback]
+            return [{"index": i, "name": m.name, "channels": int(m.channels),
+                     "rate": 48000, "loopback": True}
+                    for i, m in enumerate(devices)], None
+        except Exception as exc:
+            return [], str(exc)
+
+    def _start_linux(self):
+        try:
+            import soundcard as sc
+            devices = [m for m in sc.all_microphones(include_loopback=True)
+                       if m.isloopback]
+            if self.device_wanted:
+                mic = next((m for m in devices if m.name == self.device_wanted), None)
+                if mic is None:
+                    raise RuntimeError(f"o dispositivo {self.device_wanted} nao esta conectado; escolha outro na aba Fontes")
+            elif self.device_index is not None:
+                mic = devices[int(self.device_index)]
+            else:
+                speaker = sc.default_speaker()
+                if speaker is None:
+                    raise RuntimeError("nenhuma saida de audio padrao disponivel")
+                # No PulseAudio/PipeWire o monitor e uma fonte distinta,
+                # cujo id e o id da saida com sufixo .monitor. Procurar o
+                # id da saida como microfone pode falhar ou escolher outra
+                # fonte por busca aproximada.
+                monitor_id = speaker.id + ".monitor"
+                mic = next((m for m in devices if m.id == monitor_id), None)
+                if mic is None:
+                    raise RuntimeError("nenhum monitor de audio encontrado para a saida padrao")
+            self.device_name = mic.name
+            self._rate = 48000
+            self._channels = max(1, int(mic.channels))
+            self._build_bands()
+            ready = threading.Event()
+            def capture():
+                try:
+                    with mic.recorder(samplerate=self._rate, channels=self._channels,
+                                      blocksize=CHUNK) as recorder:
+                        # A abertura pode terminar depois do timeout ou de stop().
+                        if self._stop.is_set():
+                            return
+                        self._stream = recorder
+                        self.state.enabled = True
+                        ready.set()
+                        while not self._stop.is_set():
+                            samples = np.asarray(recorder.record(numframes=CHUNK), dtype=np.float32)
+                            if self._stop.is_set():
+                                break
+                            if samples.ndim > 1:
+                                samples = samples[:, :2].mean(axis=1)
+                            self._consume(samples)
+                            self.state.beat *= 0.82
+                except Exception as exc:
+                    self.error = str(exc)
+                finally:
+                    self._stream = None
+                    self.state.enabled = False
+                    ready.set()
+            self._thread = threading.Thread(target=capture, daemon=True, name="spectra-audio")
+            self._thread.start()
+            if not ready.wait(5):
+                self.error = "a captura de audio nao iniciou"
+                self._stop.set()
+                return False
+            return self.running
+        except Exception as exc:
+            self.error = str(exc)
+            return False
 
     def _default_loopback(self, p):
         import pyaudiowpatch as pa
@@ -111,8 +189,14 @@ class AudioSource:
         Devolve False quando a captura nao esta disponivel nesta maquina.
         """
         if self._thread and self._thread.is_alive():
+            if self._stop.is_set():
+                self.error = "a captura de audio anterior ainda esta encerrando"
+                return False
             return True
         self._stop.clear()
+        if sys.platform.startswith("linux"):
+            self.error = None
+            return self._start_linux()
         try:
             import pyaudiowpatch as pa
         except Exception as exc:
@@ -155,7 +239,7 @@ class AudioSource:
         if t is not None and t is not threading.current_thread():
             t.join(timeout=1.0)
         try:
-            if self._stream:
+            if self._stream and not sys.platform.startswith("linux"):
                 self._stream.stop_stream()
                 self._stream.close()
         except Exception:
@@ -195,13 +279,18 @@ class AudioSource:
                 usable = (samples.size // self._channels) * self._channels
                 frames = samples[:usable].reshape(-1, self._channels)
                 samples = frames[:, :2].mean(axis=1)
-            k = min(len(samples), self.fft_size)
-            self._buf = np.roll(self._buf, -k)
-            self._buf[-k:] = samples[-k:]
-            self._analyze()
+            self._consume(samples)
         except Exception as exc:
             self.error = str(exc)
         return (None, pa.paContinue)
+
+    def _consume(self, samples):
+        k = min(len(samples), self.fft_size)
+        if not k:
+            return
+        self._buf = np.roll(self._buf, -k)
+        self._buf[-k:] = samples[-k:]
+        self._analyze()
 
     def _analyze(self):
         s = self.state

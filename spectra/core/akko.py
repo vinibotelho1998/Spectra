@@ -32,6 +32,11 @@ quando a cena muda, e nao animacao.
 
 from __future__ import annotations
 
+import sys
+import os
+
+_WINDOWS = sys.platform == "win32"
+
 import ctypes
 import threading
 import time
@@ -90,79 +95,91 @@ DELTA_MIN = 3
 # chaveador, e longe de um soluco isolado do controlador.
 FALHAS_MAX = 25
 
-_setupapi = ctypes.WinDLL("setupapi")
-_hid = ctypes.WinDLL("hid")
-_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+if _WINDOWS:
+    _setupapi = ctypes.WinDLL("setupapi")
+    _hid = ctypes.WinDLL("hid")
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 
-class _GUID(ctypes.Structure):
-    _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
-                ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+    class _GUID(ctypes.Structure):
+        _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                    ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
 
 
-class _IFACE(ctypes.Structure):
-    _fields_ = [("cbSize", wintypes.DWORD), ("InterfaceClassGuid", _GUID),
-                ("Flags", wintypes.DWORD),
-                ("Reserved", ctypes.POINTER(wintypes.ULONG))]
+    class _IFACE(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("InterfaceClassGuid", _GUID),
+                    ("Flags", wintypes.DWORD),
+                    ("Reserved", ctypes.POINTER(wintypes.ULONG))]
 
 
-class _DETAIL(ctypes.Structure):
-    _fields_ = [("cbSize", wintypes.DWORD), ("DevicePath", wintypes.WCHAR * 1)]
+    class _DETAIL(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("DevicePath", wintypes.WCHAR * 1)]
 
 
-class _ATTRS(ctypes.Structure):
-    _fields_ = [("Size", wintypes.ULONG), ("VendorID", wintypes.USHORT),
-                ("ProductID", wintypes.USHORT),
-                ("VersionNumber", wintypes.USHORT)]
+    class _ATTRS(ctypes.Structure):
+        _fields_ = [("Size", wintypes.ULONG), ("VendorID", wintypes.USHORT),
+                    ("ProductID", wintypes.USHORT),
+                    ("VersionNumber", wintypes.USHORT)]
 
 
-class _CAPS(ctypes.Structure):
-    _fields_ = [("Usage", wintypes.USHORT), ("UsagePage", wintypes.USHORT),
-                ("InputReportByteLength", wintypes.USHORT),
-                ("OutputReportByteLength", wintypes.USHORT),
-                ("FeatureReportByteLength", wintypes.USHORT),
-                ("Reserved", wintypes.USHORT * 17),
-                ("Numeros", wintypes.USHORT * 10)]
+    class _CAPS(ctypes.Structure):
+        _fields_ = [("Usage", wintypes.USHORT), ("UsagePage", wintypes.USHORT),
+                    ("InputReportByteLength", wintypes.USHORT),
+                    ("OutputReportByteLength", wintypes.USHORT),
+                    ("FeatureReportByteLength", wintypes.USHORT),
+                    ("Reserved", wintypes.USHORT * 17),
+                    ("Numeros", wintypes.USHORT * 10)]
 
 
-_setupapi.SetupDiGetClassDevsW.restype = wintypes.HANDLE
-_setupapi.SetupDiGetClassDevsW.argtypes = [
-    ctypes.POINTER(_GUID), wintypes.LPCWSTR, wintypes.HWND, wintypes.DWORD]
-_setupapi.SetupDiEnumDeviceInterfaces.restype = wintypes.BOOL
-_setupapi.SetupDiEnumDeviceInterfaces.argtypes = [
-    wintypes.HANDLE, ctypes.c_void_p, ctypes.POINTER(_GUID), wintypes.DWORD,
-    ctypes.POINTER(_IFACE)]
-_setupapi.SetupDiGetDeviceInterfaceDetailW.restype = wintypes.BOOL
-_setupapi.SetupDiGetDeviceInterfaceDetailW.argtypes = [
-    wintypes.HANDLE, ctypes.POINTER(_IFACE), ctypes.c_void_p, wintypes.DWORD,
-    ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
-_setupapi.SetupDiDestroyDeviceInfoList.argtypes = [wintypes.HANDLE]
+    _setupapi.SetupDiGetClassDevsW.restype = wintypes.HANDLE
+    _setupapi.SetupDiGetClassDevsW.argtypes = [
+        ctypes.POINTER(_GUID), wintypes.LPCWSTR, wintypes.HWND, wintypes.DWORD]
+    _setupapi.SetupDiEnumDeviceInterfaces.restype = wintypes.BOOL
+    _setupapi.SetupDiEnumDeviceInterfaces.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, ctypes.POINTER(_GUID), wintypes.DWORD,
+        ctypes.POINTER(_IFACE)]
+    _setupapi.SetupDiGetDeviceInterfaceDetailW.restype = wintypes.BOOL
+    _setupapi.SetupDiGetDeviceInterfaceDetailW.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(_IFACE), ctypes.c_void_p, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
+    _setupapi.SetupDiDestroyDeviceInfoList.argtypes = [wintypes.HANDLE]
 
-_k32.CreateFileW.restype = wintypes.HANDLE
-_k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                             ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
-                             wintypes.HANDLE]
-_k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _k32.CreateFileW.restype = wintypes.HANDLE
+    _k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                 ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                 wintypes.HANDLE]
+    _k32.CloseHandle.argtypes = [wintypes.HANDLE]
 
-_hid.HidD_GetHidGuid.argtypes = [ctypes.POINTER(_GUID)]
-_hid.HidD_GetAttributes.restype = wintypes.BOOLEAN
-_hid.HidD_GetAttributes.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ATTRS)]
-_hid.HidD_GetPreparsedData.restype = wintypes.BOOLEAN
-_hid.HidD_GetPreparsedData.argtypes = [wintypes.HANDLE,
-                                       ctypes.POINTER(ctypes.c_void_p)]
-_hid.HidD_FreePreparsedData.argtypes = [ctypes.c_void_p]
-_hid.HidP_GetCaps.argtypes = [ctypes.c_void_p, ctypes.POINTER(_CAPS)]
-_hid.HidD_SetFeature.restype = wintypes.BOOLEAN
-_hid.HidD_SetFeature.argtypes = [wintypes.HANDLE, ctypes.c_void_p,
-                                 wintypes.ULONG]
+    _hid.HidD_GetHidGuid.argtypes = [ctypes.POINTER(_GUID)]
+    _hid.HidD_GetAttributes.restype = wintypes.BOOLEAN
+    _hid.HidD_GetAttributes.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ATTRS)]
+    _hid.HidD_GetPreparsedData.restype = wintypes.BOOLEAN
+    _hid.HidD_GetPreparsedData.argtypes = [wintypes.HANDLE,
+                                           ctypes.POINTER(ctypes.c_void_p)]
+    _hid.HidD_FreePreparsedData.argtypes = [ctypes.c_void_p]
+    _hid.HidP_GetCaps.argtypes = [ctypes.c_void_p, ctypes.POINTER(_CAPS)]
+    _hid.HidD_SetFeature.restype = wintypes.BOOLEAN
+    _hid.HidD_SetFeature.argtypes = [wintypes.HANDLE, ctypes.c_void_p,
+                                     wintypes.ULONG]
 
-DIGCF_PRESENT = 0x02
-DIGCF_DEVICEINTERFACE = 0x10
-GENERIC_READ = 0x80000000
-GENERIC_WRITE = 0x40000000
-FILE_SHARE_RW = 0x03
-OPEN_EXISTING = 3
-INVALIDO = wintypes.HANDLE(-1).value
+    DIGCF_PRESENT = 0x02
+    DIGCF_DEVICEINTERFACE = 0x10
+    GENERIC_READ = 0x80000000
+    GENERIC_WRITE = 0x40000000
+    FILE_SHARE_RW = 0x03
+    OPEN_EXISTING = 3
+    INVALIDO = wintypes.HANDLE(-1).value
+
+else:
+    # hidapi seleciona a colecao vendor pelo usage e envia feature reports
+    # com o mesmo byte de report ID usado pelo backend do Windows.
+    _hid = None
+    _k32 = None
+    INVALIDO = -1
+    GENERIC_READ = 0x80000000
+    GENERIC_WRITE = 0x40000000
+    FILE_SHARE_RW = 0x03
+    OPEN_EXISTING = 3
 
 
 def _procura() -> tuple:
@@ -171,6 +188,23 @@ def _procura() -> tuple:
     Sao varias colecoes HID no mesmo teclado, e so a de usage page 0xFFFF
     com usage 2 aceita o relatorio de configuracao.
     """
+    if not _WINDOWS:
+        try:
+            import hidraw
+        except ImportError as exc:
+            raise OSError("Biblioteca hidapi ausente; instale as dependencias do Spectra") from exc
+        desconhecida = False
+        for dev in hidraw.enumerate(VID, PID):
+            usage = (dev.get("usage_page"), dev.get("usage"))
+            if usage == (USAGE_PAGE, USAGE) and dev.get("path"):
+                return dev["path"], 65
+            # Alguns backends nao conseguem ler o descritor sem permissao.
+            # Nunca tente escrever em outra colecao sem identificacao.
+            if not usage[0] or not usage[1]:
+                desconhecida = True
+        if desconhecida:
+            raise OSError("Akko detectado, mas nao foi possivel identificar a interface HID; verifique as permissoes hidraw e a regra udev")
+        return None, 0
     guid = _GUID()
     _hid.HidD_GetHidGuid(ctypes.byref(guid))
     lista = _setupapi.SetupDiGetClassDevsW(
@@ -355,13 +389,31 @@ class AkkoKeyboard:
             if not caminho:
                 self.erro = "teclado Akko nao encontrado"
                 return False
-            h = _k32.CreateFileW(caminho, GENERIC_READ | GENERIC_WRITE,
-                                 FILE_SHARE_RW, None, OPEN_EXISTING, 0, None)
-            if h == INVALIDO:
-                self.erro = "sem acesso a interface do teclado (erro %d)" % (
-                    ctypes.get_last_error(),)
+            if tamanho < 65:
+                self.erro = "interface HID Akko com relatorio menor que 65 bytes"
                 return False
-            self.caminho, self.tamanho, self._h = caminho, tamanho, h
+            if _WINDOWS:
+                h = _k32.CreateFileW(caminho, GENERIC_READ | GENERIC_WRITE,
+                                     FILE_SHARE_RW, None, OPEN_EXISTING, 0, None)
+                if h == INVALIDO:
+                    self.erro = "sem acesso a interface do teclado (erro %d)" % (
+                        ctypes.get_last_error(),)
+                    return False
+            else:
+                h = None
+                try:
+                    import hidraw
+                    h = hidraw.device()
+                    h.open_path(caminho)
+                except (OSError, ImportError) as exc:
+                    if h is not None:
+                        try:
+                            h.close()
+                        except OSError:
+                            pass
+                    self.erro = "sem acesso a interface do teclado; verifique as permissoes hidraw e a regra udev: %s" % exc
+                    return False
+            self.caminho, self.tamanho, self._h = os.fsdecode(caminho), tamanho, h
             self.erro = None
             return True
 
@@ -375,7 +427,13 @@ class AkkoKeyboard:
         # religado e estar no efeito salvo, e sem o modo de fluxo de novo a
         # cor mandada nao aparece.
         if self._h is not None:
-            _k32.CloseHandle(self._h)
+            if _WINDOWS:
+                _k32.CloseHandle(self._h)
+            else:
+                try:
+                    self._h.close()
+                except OSError:
+                    pass
             self._h = None
         self._modo = None
         self._ultima = None
@@ -385,7 +443,16 @@ class AkkoKeyboard:
         buf = ctypes.create_string_buffer(self.tamanho)
         buf[0] = bytes([0])
         buf[1:1 + len(pacote)] = pacote
-        if _hid.HidD_SetFeature(self._h, buf, self.tamanho):
+        if self._h is None:
+            return False
+        if _WINDOWS:
+            ok = _hid.HidD_SetFeature(self._h, buf, self.tamanho)
+        else:
+            try:
+                ok = self._h.send_feature_report(buf.raw) == self.tamanho
+            except OSError:
+                ok = False
+        if ok:
             self._falhas = 0
             return True
         self._falhas += 1
