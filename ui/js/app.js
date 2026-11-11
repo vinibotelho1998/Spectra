@@ -553,7 +553,7 @@ function renderCanvasVazio(el, st, compacto) {
     b.addEventListener("click", () => reconectar(b));
   } else if (k === "sem_leds") {
     b.className = "btn sm primary";
-    b.textContent = "Abrir assistente";
+    b.textContent = "Configurar LEDs";
     b.addEventListener("click", () => startWizard());
   } else if (k === "sem_controle") {
     b.textContent = "Abrir Hardware";
@@ -1580,9 +1580,9 @@ function renderZoneEditor() {
     const p = document.createElement("p");
     p.className = "hint";
     p.style.margin = "0 0 12px";
-    p.innerHTML = `Esta zona foi montada pelo assistente com
+    p.innerHTML = `Esta zona esta no mapa com
       <b>${(g.parts || []).length} pecas</b>. Arraste no mapa para mover o
-      conjunto inteiro, ou refaca o assistente para mudar a divisao.`;
+      conjunto inteiro.`;
     box.appendChild(p);
     box.appendChild(switchEl("Inverter ordem dos LEDs", !!g.reverse, (v) => {
       z.geometry.reverse = v;
@@ -1869,9 +1869,9 @@ function renderDevices(force) {
   if (resizable.length) {
     const conf = document.createElement("button");
     conf.className = "btn sm";
-    conf.textContent = "Conferir quantidade de LEDs";
-    conf.title = "Acende o que ja foi contado em cada conector, sem contar de novo";
-    conf.addEventListener("click", () => startWizard(resizable, { conferir: true }));
+    conf.textContent = "Configurar LEDs";
+    conf.title = "Regua de cada conector: clique e veja no gabinete o que acende";
+    conf.addEventListener("click", () => startWizard(resizable));
     info.appendChild(conf);
     box.insertAdjacentHTML("beforeend",
       `<p class="hint" style="margin:0">LED aceso numa cor que voce nao escolheu? A
@@ -1958,8 +1958,8 @@ function renderDevices(force) {
         // gradiente so onde ainda falta contar; com a contagem feita, tres
         // botoes coloridos empilhados chamavam mais atencao que o resto
         find.className = z.leds_count ? "btn sm ghost" : "btn sm primary";
-        find.textContent = "Descobrir";
-        find.title = "Abre o assistente para achar a contagem certa";
+        find.textContent = "Calibrar";
+        find.title = "Abre a regua deste conector para achar a contagem certa";
         find.addEventListener("click", () => openProbe(d.key, z.index, z.name));
         acts.append(document.createTextNode("LEDs:"), inp, b, find);
       }

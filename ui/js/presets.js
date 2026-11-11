@@ -565,18 +565,7 @@ function renderSetupBanner(force) {
     return;
   }
 
-  const rows = todo.map((z) => `
-    <div class="row" data-dev="${esc(z.device)}" data-zone="${z.zone}">
-      <span class="nm">${esc(z.zone_name)} <small>· ${esc(z.device_name)}</small></span>
-      <div class="quick">
-        <button data-n="8">8</button><button data-n="12">12</button>
-        <button data-n="18">18</button><button data-n="24">24</button>
-        <button data-n="36">36</button><button data-n="54">54</button>
-      </div>
-      <input type="number" min="1" max="${z.max}" placeholder="LEDs">
-      <button class="btn sm apply">Aplicar</button>
-      <button class="btn sm find">Descobrir</button>
-    </div>`).join("");
+  const nomes = todo.map((z) => `<b>${esc(z.zone_name)}</b>`).join(", ");
 
   // O aviso da RAM so quando ela esta mesmo de fora, e apontando para o
   // Corrigir da aba Hardware: o script que ele mandava rodar nao vem no
@@ -585,18 +574,18 @@ function renderSetupBanner(force) {
   const ramDeFora = e.servidor_elevado === false ||
     (e.servidor_elevado === true && !e.dram && !e.pawnio);
 
+  // Sem chute de contagem aqui: os numeros prontos acertavam por sorte, e
+  // o que passa da conta fica aceso numa cor que ninguem escolheu.
   box.innerHTML = `
     <div class="setup">
       <div class="head-row">
         <h3>Falta dizer quantos LEDs voce tem</h3>
-        <button class="btn primary sm" id="startWizard">Abrir assistente</button>
+        <button class="btn primary sm" id="startWizard">Configurar LEDs</button>
       </div>
-      <p>Estes conectores estao com <b>0 LEDs</b>, entao nada acende neles.
-      Ninguem consegue detectar isso automaticamente: o padrao ARGB e mao unica,
-      a fita nunca responde quantos LEDs tem. Mas o <b>assistente</b> descobre
-      para voce — ele acende trechos e pergunta o que voce ve, achando o
-      numero exato em poucos cliques.</p>
-      <div class="rows">${rows}</div>
+      <p>Sem contagem ainda: ${nomes}. Nada acende ${todo.length > 1 ? "neles" : "nele"} ate isso. O padrao
+      ARGB e mao unica, a fita nunca diz quantos LEDs tem. Em <b>Configurar
+      LEDs</b> voce clica nos LEDs de uma regua e ve no gabinete o que acende,
+      conector por conector e peca por peca.</p>
       ${ramDeFora ? `<p class="note">Faltando RAM, water cooler ou GPU na lista?
       Veja o aviso na aba Hardware. <button class="btn sm ghost" id="bannerHardware">Abrir
       Hardware</button></p>` : ""}
@@ -606,48 +595,6 @@ function renderSetupBanner(force) {
   if (wz) wz.addEventListener("click", () => startWizard(todo));
   const hw = $("#bannerHardware");
   if (hw) hw.addEventListener("click", () => showTab("devices"));
-
-  $$("#setupBanner .row").forEach((row) => {
-    const inp = row.querySelector("input");
-    const chave = `${row.dataset.dev}:${row.dataset.zone}`;
-    // o aviso so lista conector ainda sem contagem, entao a de agora e zero
-    const rascunho = rascunhoLeds(chave, 0);
-    if (rascunho !== null) inp.value = rascunho;
-    inp.addEventListener("input", () => guardaRascunhoLeds(chave, 0, inp.value));
-    $$(".quick button", row).forEach((qb) =>
-      qb.addEventListener("click", () => {
-        inp.value = qb.dataset.n;
-        guardaRascunhoLeds(chave, 0, inp.value);
-        inp.focus();
-      }));
-    row.querySelector(".find").addEventListener("click", () =>
-      openProbe(row.dataset.dev, parseInt(row.dataset.zone, 10),
-                row.querySelector(".nm").textContent.split("·")[0].trim()));
-    const aplicar = async (btn) => {
-      const n = parseInt(inp.value, 10);
-      if (!(n > 0)) return toast("Digite quantos LEDs esse conector tem", true);
-      btn.classList.add("busy");
-      try {
-        const r = await API.post("/api/zone/resize", {
-          device: row.dataset.dev,
-          zone: parseInt(row.dataset.zone, 10),
-          size: n,
-        });
-        if (r.ok) RASCUNHO_LEDS.delete(chave);
-        toast(r.ok ? `${n} LEDs configurados` : (r.error || "falhou"), !r.ok);
-      } catch (err) {
-        toast(err.message, true);
-      }
-      btn.classList.remove("busy");
-      await refreshState();
-      renderSetupBanner(true);
-      renderPresets();
-    };
-    row.querySelector(".apply").addEventListener("click", (e) => aplicar(e.currentTarget));
-    inp.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") aplicar(row.querySelector(".apply"));
-    });
-  });
 }
 
 /** O aviso de sem conexao, com a acao que resolve o motivo de verdade. O

@@ -276,3 +276,81 @@ test("changing the effect drains old slider edits before replacing its parameter
     id: "A", patch: { effect: "wave", params: { speed: 8 }, name: "Wave" },
   });
 });
+
+// A regua de Configurar LEDs: o que acende no gabinete e como as pecas se
+// dividem. So as funcoes puras de ui/js/probe.js, sem DOM nem servidor.
+function regua() {
+  const fonte = fs.readFileSync(path.join(__dirname, "../ui/js/probe.js"), "utf8");
+  const ini = fonte.indexOf("// ---- regua: funcoes puras");
+  const fim = fonte.indexOf("// ---- regua: fim das funcoes puras");
+  assert.ok(ini >= 0 && fim > ini, "Missing ruler test boundary in probe.js");
+  const context = vm.createContext({});
+  vm.runInContext(fonte.slice(ini, fim) + `
+    globalThis.r = { coresDaRegua, contagemDoCursor, marcarFim, tirarFim, cortarPecas, pecasSalvas,
+      pecaDoLed, CAL_VERDE, CAL_VERMELHO, CAL_BRANCO, CAL_SOBRA, CAL_APAGADO,
+      CAL_CORES_PECAS };`, context, { filename: "ui/js/probe.js" });
+  return context.r;
+}
+
+const leds = (hex) => hex.match(/.{6}/g);
+// array criado no contexto do VM nao e igual por referencia ao daqui
+const contas = (pecas) => Array.from(pecas, (p) => p.count);
+
+test("ruler lights green up to the cursor, white on it and red after it", () => {
+  const r = regua();
+  assert.deepEqual(leds(r.coresDaRegua("ate", 3, 5, 0, [])),
+    [r.CAL_VERDE, r.CAL_VERDE, r.CAL_BRANCO, r.CAL_VERMELHO, r.CAL_VERMELHO]);
+  assert.deepEqual(leds(r.coresDaRegua("ate", 0, 3, 0, [])),
+    [r.CAL_VERMELHO, r.CAL_VERMELHO, r.CAL_VERMELHO]);
+});
+
+test("ruler single mode lights only the cursor LED", () => {
+  const r = regua();
+  assert.deepEqual(leds(r.coresDaRegua("so", 2, 4, 4, [])),
+    [r.CAL_APAGADO, r.CAL_BRANCO, r.CAL_APAGADO, r.CAL_APAGADO]);
+});
+
+test("ruler piece mode colors each piece and flags LEDs past the count", () => {
+  const r = regua();
+  const [a, b] = r.CAL_CORES_PECAS;
+  assert.deepEqual(leds(r.coresDaRegua("pecas", 1, 6, 4, [{ count: 2 }, { count: 1 }])),
+    [a, a, b, r.CAL_SOBRA, r.CAL_VERMELHO, r.CAL_VERMELHO]);
+});
+
+test("marking a piece end appends after the last piece or splits the one under the cursor", () => {
+  const r = regua();
+  let p = r.marcarFim([], 8);
+  assert.deepEqual(contas(p), [8]);
+  p = r.marcarFim(p, 16);
+  assert.deepEqual(contas(p), [8, 8]);
+  p = r.marcarFim(p, 4);
+  assert.deepEqual(contas(p), [4, 4, 8]);
+  assert.deepEqual(contas(r.marcarFim(p, 8)), [4, 4, 8]);
+  assert.deepEqual(contas(r.marcarFim(p, 0)), [4, 4, 8]);
+  assert.equal(r.pecaDoLed(p, 5), 1);
+  assert.equal(r.pecaDoLed(p, 17), -1);
+});
+
+test("removing a piece end merges it with the next one and drops the last", () => {
+  const r = regua();
+  const p = [{ count: 4 }, { count: 4 }, { count: 8 }];
+  assert.deepEqual(contas(r.tirarFim(p, 0)), [8, 8]);
+  assert.deepEqual(contas(r.tirarFim(p, 2)), [4, 4]);
+  assert.deepEqual(contas(r.tirarFim(p, 5)), [4, 4, 8]);
+});
+
+test("pieces are cut at the connector count, saved or not", () => {
+  const r = regua();
+  assert.deepEqual(contas(r.cortarPecas([{ count: 8 }, { count: 8 }, { count: 8 }], 20)), [8, 8, 4]);
+  assert.deepEqual(contas(r.pecasSalvas([8, "x", 8], 10)), [8, 2]);
+  assert.deepEqual(contas(r.pecasSalvas(null, 10)), []);
+  assert.deepEqual(contas(r.pecasSalvas([8, 8], 0)), []);
+});
+
+test("in the up-to mode the green LEDs are what gets saved", () => {
+  const r = regua();
+  assert.equal(r.contagemDoCursor("ate", 30, 22), 30);
+  assert.equal(r.contagemDoCursor("ate", 0, 22), 0);
+  assert.equal(r.contagemDoCursor("so", 30, 22), 22);
+  assert.equal(r.contagemDoCursor("pecas", 30, 22), 22);
+});

@@ -1677,6 +1677,46 @@ class TestAssistenteDeLeds:
     def test_divisao_de_zona_que_nao_existe(self, spectra, chave):
         assert spectra.probe_split_preview(chave, 9, 3, 7)["ok"] is False
 
+    def test_regua_pinta_cada_led_com_a_cor_pedida(self, spectra, chave):
+        spectra.probe_multi_start(probe_max=6)
+        r = spectra.probe_pintar(chave, 0, "00ff3c" * 2 + "ffffff" + "ff0000" * 3)
+        assert r == {"ok": True, "lit": 6}
+        assert _leds(spectra.client.last[(0, 0)]) == (
+            [(0, 255, 60)] * 2 + [BRANCO] + [(255, 0, 0)] * 3)
+
+    def test_regua_apaga_o_que_faltou_e_ignora_o_que_passou(self, spectra, chave):
+        spectra.probe_multi_start(probe_max=4)
+        assert spectra.probe_pintar(chave, 1, "ff0000")["lit"] == 1
+        assert _leds(spectra.client.last[(0, 1)]) == [(255, 0, 0)] + [(0, 0, 0)] * 3
+        assert spectra.probe_pintar(chave, 1, "ffffff" * 9)["lit"] == 4
+
+    def test_regua_apaga_os_outros_conectores(self, spectra, chave):
+        spectra.probe_multi_start(probe_max=4)
+        spectra.client.last.clear()
+        spectra.probe_pintar(chave, 0, "ffffff" * 4)
+        assert set(spectra.client.last[0]) == {0}
+
+    def test_regua_sem_sessao_ou_cor_ilegivel_e_recusada(self, spectra, chave):
+        assert spectra.probe_pintar(chave, 0, "ffffff")["ok"] is False
+        spectra.probe_multi_start(probe_max=4)
+        spectra.client.zone_writes.clear()
+        assert spectra.probe_pintar(chave, 0, "zzzzzz")["ok"] is False
+        assert spectra.probe_pintar(chave, 9, "ffffff")["ok"] is False
+        assert spectra.probe_pintar(chave, 0, None) == {"ok": True, "lit": 0}
+        assert spectra.client.zone_writes == [(0, 0, 4)]
+
+    def test_divisao_em_pecas_fica_gravada_e_no_estado(self, spectra, chave):
+        assert spectra.set_pecas(chave, 0, [3, "5"]) == {"ok": True}
+        assert spectra.config["pecas"] == {f"{chave}:0": [3, 5]}
+        assert spectra.state()["pecas"] == {f"{chave}:0": [3, 5]}
+        assert spectra.set_pecas(chave, 0, []) == {"ok": True}
+        assert spectra.config["pecas"] == {}
+
+    def test_divisao_em_pecas_invalida_e_recusada(self, spectra, chave):
+        for ruim in (None, [0], [-1], ["x"], [300, 300], [1] * 65):
+            assert spectra.set_pecas(chave, 0, ruim)["ok"] is False
+        assert (spectra.config.get("pecas") or {}) == {}
+
     def test_concluir_grava_o_confirmado_e_devolve_o_resto(self, spectra, chave):
         spectra.probe_multi_start(probe_max=64)
         assert spectra.probe_commit(chave, 0, 10) == {"ok": True}
@@ -1693,7 +1733,12 @@ class TestAssistenteDeLeds:
         spectra.probe_finish()
         assert _conta(spectra, 0, 1) == 0
         assert spectra.config["zone_sizes"] == {f"{chave}:1": 0}
-        assert spectra.setup_todo()[0]["zone"] == 1
+        # vazio foi uma resposta: o aviso de primeira abertura nao volta
+        assert spectra.setup_todo() == []
+
+    def test_conector_zerado_sem_resposta_continua_no_aviso(self, spectra, chave):
+        spectra.resize_zones([(chave, 1, 0)], persist=False)
+        assert [z["zone"] for z in spectra.setup_todo()] == [1]
 
     def test_render_ja_pausado_continua_pausado(self, spectra, chave):
         spectra.renderer.settings["paused"] = True
@@ -2844,6 +2889,10 @@ ROTAS = [
      ("probe_split_preview", ("D", 0, 4, 8), {})),
     ("/api/probe/isolate", {"device": "D", "zone": 0, "start": 2, "count": 3},
      ("probe_isolate", ("D", 0, 2, 3, "#ffffff"), {})),
+    ("/api/probe/pintar", {"device": "D", "zone": "1", "cores": "ff0000"},
+     ("probe_pintar", ("D", 1, "ff0000"), {})),
+    ("/api/zone/pecas", {"device": "D", "zone": "0", "pecas": [3, 5]},
+     ("set_pecas", ("D", 0, [3, 5]), {})),
     ("/api/zone/identify", {"device": "D", "zone": 0},
      ("identify_zone", ("D", 0, 1.6, "#ffffff"), {})),
     ("/api/zone/plan", {"device": "D", "zone": 0, "parts": [1]},

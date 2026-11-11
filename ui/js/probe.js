@@ -1,706 +1,510 @@
 "use strict";
 
-const HEADER_COLORS = ["#ff2d55", "#00d9ff", "#7cff00", "#ffb020", "#a855f7"];
-const PROBE_MAX = 256;
+/* Configurar LEDs: uma regua clicavel por conector ARGB.
+ *
+ * Conector ARGB e mao unica, a fita nunca diz quantos LEDs tem. A regua
+ * acende no gabinete o que a pessoa clica: do 1 ate o LED escolhido em
+ * verde e o resto do conector em vermelho. Vermelho aparecendo quer dizer
+ * que ainda tem LED depois. A mesma regua marca onde cada peca termina,
+ * para saber quantos LEDs cada fan, fita ou placa tem.
+ */
 
-const W = {
-  step: 0,
-  zones: [],
-  inventory: [],
-  assign: {},
-  perPiece: {},
-  round: 0,
-  seen: new Set(),
-  busy: false,
-};
+// ---- regua: funcoes puras, testadas em tests/test_frontend.js ----
 
-const zoneKey = (z) => `${z.device}:${z.zone}`;
+const CAL_VERDE = "00ff3c";
+const CAL_VERMELHO = "ff0000";
+const CAL_BRANCO = "ffffff";
+const CAL_SOBRA = "303030";
+const CAL_APAGADO = "000000";
+const CAL_CORES_PECAS = ["ff2d55", "00b4ff", "8cff00", "ffb000", "aa5aff", "00ffc8"];
 
-// Uma linha generica. A sugestao antiga era um gabinete especifico, com dois
-// grupos de fans e uma fita de cabo de 24 pinos que quase ninguem tem, e
-// quem nao apagava essa linha a via aparecer na atribuicao e no mapa.
-function defaultInventory() {
-  return [
-    { id: "fans", label: "Fans", kind: "fan", pieces: 3, spot: "frente_meio" },
-  ];
+/** Contagem do conector depois de o cursor andar. No "ate", o que fica
+ *  verde e o que vai ser salvo; nos outros modos o cursor so aponta. Com
+ *  um botao a parte para gravar a contagem, clicar no LED e salvar nao
+ *  gravava nada. */
+function contagemDoCursor(modo, cursor, contagem) {
+  return modo === "ate" ? cursor : contagem;
 }
 
-/** Abre o assistente. Com `conferir`, os conectores que ja tem contagem
- *  comecam nela e o assistente abre direto na conferencia: antes o botao
- *  de conferir zerava tudo e refazia a busca inteira do zero. */
-async function startWizard(list, opcoes) {
-  if (W.busy || !$("#probeModal").hidden) return;
-  W.busy = true;
-  const conferir = !!(opcoes && opcoes.conferir);
-  try {
-    const r = await API.post("/api/probe/multi/start", { max: PROBE_MAX });
-    if (!r.ok) return toast(r.error || "nao consegui iniciar", true);
+/** Fim de cada peca, contado do primeiro LED do conector. */
+function fimDasPecas(pecas) {
+  let acc = 0;
+  return pecas.map((p) => (acc += p.count));
+}
 
-    let zs = r.zones;
-    if (list && list.length) {
-      const want = new Set(list.map((z) => `${z.device}:${z.zone}`));
-      zs = zs.filter((z) => want.has(`${z.device}:${z.zone}`));
-    }
-    W.zones = zs.map((z, i) => {
-      // a busca vai ate o que o conector aceita, e nao sempre ate 256: num
-      // conector de 120 a primeira rodada acendia do LED 129 em diante, nada
-      // acendia e a pessoa achava que tinha quebrado
-      const max = Math.max(1, z.max || PROBE_MAX);
-      const zona = {
-        device: z.device, zone: z.zone, name: z.zone_name, max,
-        color: HEADER_COLORS[i % HEADER_COLORS.length],
-        lo: 1, hi: max, count: null, empty: false,
-        antes: z.antes, plano: planoSalvo(z.device, z.zone),
-      };
-      if (conferir && z.antes > 0) {
-        zona.count = Math.min(z.antes, max);
-        zona.lo = zona.hi = zona.count;
-      }
-      return zona;
+/** Indice da peca que contem o LED, ou -1 quando ele nao tem peca. */
+function pecaDoLed(pecas, led) {
+  const fins = fimDasPecas(pecas);
+  return fins.findIndex((fim) => led <= fim);
+}
+
+/** Cores de cada LED do conector, em hexadecimal corrido.
+ *
+ * "ate": do 1 ao cursor em verde, o cursor em branco e o resto em vermelho.
+ * "so": so o LED do cursor, em branco.
+ * "pecas": cada peca numa cor, LED sem peca em cinza e o que passa da
+ * contagem em vermelho. */
+function coresDaRegua(modo, cursor, max, contagem, pecas) {
+  const out = new Array(max).fill(CAL_APAGADO);
+  if (modo === "so") {
+    if (cursor >= 1 && cursor <= max) out[cursor - 1] = CAL_BRANCO;
+  } else if (modo === "pecas") {
+    let ini = 0;
+    pecas.forEach((p, i) => {
+      for (let k = ini; k < Math.min(ini + p.count, max); k++)
+        out[k] = CAL_CORES_PECAS[i % CAL_CORES_PECAS.length];
+      ini += p.count;
     });
-    W.inventory = loadInventory();
-    W.assign = {};
-    W.perPiece = {};
-    W.round = 0;
-    W.aplicado = null;
-    // o que sobrou de um assistente cancelado no meio nao pode vazar para
-    // este: cor ja marcada como vista desviaria a contagem sem a pessoa
-    // ter respondido, e o indice velho abriria no conector errado
-    W.seen = new Set();
-    W._verifyIdx = 0;
-    W._assignIdx = 0;
-    W._splitIdx = 0;
-    W.step = conferir ? (pending().length ? 1 : 2) : 0;
-    renderStep();
-    openModal("#probeModal", $("#probeBody input, #probeBody button"));
-    if (W.step === 1) paintRound();
-  } catch (e) {
-    toast(e.message, true);
-  } finally {
-    W.busy = false;
+    for (let k = ini; k < max; k++) out[k] = k < contagem ? CAL_SOBRA : CAL_VERMELHO;
+  } else {
+    for (let k = 0; k < max; k++) out[k] = k < cursor ? CAL_VERDE : CAL_VERMELHO;
+    if (cursor >= 1 && cursor <= max) out[cursor - 1] = CAL_BRANCO;
   }
+  return out.join("");
 }
 
-function openProbe(device, zone, name) {
-  return startWizard([{ device, zone }]);
+/** Marca o fim de uma peca no LED do cursor.
+ *
+ * Dentro de uma peca, ela se divide em duas no cursor. Depois da ultima,
+ * nasce uma peca nova do fim dela ate o cursor. */
+function marcarFim(pecas, cursor) {
+  if (cursor < 1) return pecas;
+  const fins = fimDasPecas(pecas);
+  if (fins.includes(cursor)) return pecas;
+  const total = fins.length ? fins[fins.length - 1] : 0;
+  if (cursor > total) return [...pecas, { count: cursor - total }];
+  const i = pecaDoLed(pecas, cursor);
+  const ini = i > 0 ? fins[i - 1] : 0;
+  return [...pecas.slice(0, i), { count: cursor - ini }, { count: fins[i] - cursor },
+          ...pecas.slice(i + 1)];
 }
 
-/** Diz se o mapa salvo da zona e um plano de pecas feito pelo assistente. */
-function planoSalvo(device, zone) {
-  const zi = (S.zones || []).find((x) => x.device_key === device && x.zone_index === zone);
-  return !!(zi && zi.geometry && zi.geometry.shape === "multi");
+/** Tira o fim da peca `i`: ela se junta com a seguinte, e a ultima some. */
+function tirarFim(pecas, i) {
+  if (i < 0 || i >= pecas.length) return pecas;
+  if (i === pecas.length - 1) return pecas.slice(0, -1);
+  return [...pecas.slice(0, i), { count: pecas[i].count + pecas[i + 1].count },
+          ...pecas.slice(i + 2)];
 }
 
-/** Conector sem peca marcada so perde o mapa quando ele e um plano do
- *  assistente feito para outra contagem. Plano que ainda bate, ou forma
- *  desenhada na aba Layout, fica: conferir a contagem e pular a atribuicao
- *  apagava o mapa de todos os conectores, sem desfazer. */
-function planoVencido(z) {
-  return z.plano && z.count !== z.antes;
-}
-
-/** Recomeca a contagem de todos os conectores do assistente. */
-function recontar() {
-  W.zones.forEach((z) => { z.lo = 1; z.hi = z.max || PROBE_MAX; z.count = null; z.empty = false; });
-  W.step = 1;
-  W.round = 0;
-  renderStep();
-  paintRound();
-}
-
-// O inventario mora na configuracao do app: no armazenamento do navegador
-// ele sumia a cada reinicio, e o assistente voltava com a sugestao padrao.
-function loadInventory() {
-  const v = S.state && S.state.inventario;
-  if (Array.isArray(v) && v.length) return v.map((it) => ({ ...it }));
-  return defaultInventory();
-}
-
-function saveInventory() {
-  const itens = W.inventory.map((it) => ({ ...it }));
-  if (S.state) S.state.inventario = itens;
-  orderedPost("inventory", "/api/inventario", { itens }).catch((e) => toast(e.message, true));
-}
-
-async function closeWizard(apply) {
-  if (W.busy) return;
-  W.busy = true;
-  const cancel = $("#probeCancel");
-  cancel.disabled = true;
-  try {
-    await API.post("/api/probe/finish", {});
-    closeModal("#probeModal");
-  } catch (e) {
-    toast(`${e.message} O assistente continua aberto; tente sair novamente.`, true);
-    return;
-  } finally { W.busy = false; cancel.disabled = false; }
-  await refreshState();
-  renderSetupBanner();
-  renderPresets();
-  renderNowPlaying();
-  if ($("#tab-devices").classList.contains("active")) renderDevices();
-  if ($("#tab-layout").classList.contains("active")) drawLayout();
-}
-
-const STEPS = ["Inventario", "Contagem", "Conferencia", "Atribuicao",
-               "Divisao", "Aplicar"];
-
-function renderStepper() {
-  $("#probeStepper").innerHTML = STEPS.map((s, i) =>
-    `<span class="stp${i === W.step ? " on" : ""}${i < W.step ? " done" : ""}"${i === W.step ? ' aria-current="step"' : ""}>
-       <b>${i + 1}</b>${esc(s)}</span>`).join("");
-}
-
-function renderStep() {
-  renderStepper();
-  const b = $("#probeBody");
-  const restoreFocus = b.contains(document.activeElement);
-  b.innerHTML = "";
-  if (W.step === 0) stepInventory(b);
-  else if (W.step === 1) stepCount(b);
-  else if (W.step === 2) stepVerify(b);
-  else if (W.step === 3) stepAssign(b);
-  else if (W.step === 4) stepSplit(b);
-  else stepApply(b);
-  if (restoreFocus) $("input:not([hidden]), select, button:not(:disabled)", b)?.focus();
-}
-
-function nav(box, backLabel, back, nextLabel, next, nextDisabled) {
-  const d = document.createElement("div");
-  d.className = "probe-actions";
-  if (backLabel) {
-    const bb = document.createElement("button");
-    bb.className = "btn sm";
-    bb.textContent = backLabel;
-    bb.addEventListener("click", back);
-    d.appendChild(bb);
-  }
-  if (nextLabel) {
-    const nb = document.createElement("button");
-    nb.className = "btn primary";
-    nb.textContent = nextLabel;
-    nb.disabled = !!nextDisabled;
-    nb.addEventListener("click", next);
-    d.appendChild(nb);
-  }
-  box.appendChild(d);
-  return d;
-}
-
-function stepInventory(box) {
-  box.insertAdjacentHTML("beforeend", `
-    <p class="probe-lead">Descreva o que existe no gabinete. O assistente usa
-    isso para <b>calcular</b> o tamanho de cada peca em vez de perguntar, e para
-    montar o mapa fisico sozinho.</p>`);
-
-  box.insertAdjacentHTML("beforeend", `
-    <div class="inv-cols">
-      <span>Peca</span><span>Tipo</span><span>Quantas</span>
-      <span>Laminas</span><span>Onde fica</span><span></span>
-    </div>`);
-
-  const list = document.createElement("div");
-  list.className = "inv-list";
-  const spots = (S.catalog && S.catalog.spots) || [];
-
-  W.inventory.forEach((it, i) => {
-    const row = document.createElement("div");
-    row.className = "inv-row";
-    row.innerHTML = `
-      <input class="inv-label" type="text" value="${esc(it.label)}" aria-label="Nome da peca ${i + 1}">
-      <select class="inv-kind" aria-label="Tipo da peca ${i + 1}">
-        <option value="fan"${it.kind === "fan" ? " selected" : ""}>Fan (anel)</option>
-        <option value="strip"${it.kind === "strip" ? " selected" : ""}>Fita (linha)</option>
-        <option value="cable"${it.kind === "cable" ? " selected" : ""}>Fita de cabo (laminas)</option>
-      </select>
-      <input class="inv-pieces" type="number" min="1" max="24" value="${it.pieces}" title="Quantas pecas" aria-label="Quantidade de pecas">
-      <input class="inv-lanes" type="number" min="2" max="48" value="${it.lanes || 12}"
-             title="Quantas laminas paralelas" aria-label="Quantidade de laminas paralelas" ${it.kind === "cable" ? "" : "hidden"}>
-      <select class="inv-spot" aria-label="Posicao no gabinete">${spots.map((s) =>
-        `<option value="${s.value}"${s.value === it.spot ? " selected" : ""}>${esc(s.label)}</option>`).join("")}</select>
-      <button class="inv-del" title="Remover" aria-label="Remover ${esc(it.label)}">&times;</button>`;
-    row.querySelector(".inv-label").addEventListener("change", (e) => { it.label = e.target.value; saveInventory(); });
-    row.querySelector(".inv-kind").addEventListener("change", (e) => {
-      it.kind = e.target.value;
-      if (it.kind === "cable" && !it.lanes) it.lanes = 12;
-      saveInventory();
-      renderStep();
-    });
-    row.querySelector(".inv-lanes").addEventListener("change", (e) => {
-      it.lanes = clamp(parseInt(e.target.value, 10) || 12, 2, 48);
-      e.target.value = it.lanes; saveInventory();
-    });
-    row.querySelector(".inv-pieces").addEventListener("change", (e) => {
-      it.pieces = clamp(parseInt(e.target.value, 10) || 1, 1, 24);
-      e.target.value = it.pieces; saveInventory();
-    });
-    row.querySelector(".inv-spot").addEventListener("change", (e) => { it.spot = e.target.value; saveInventory(); });
-    row.querySelector(".inv-del").addEventListener("click", () => {
-      W.inventory.splice(i, 1); saveInventory(); renderStep();
-    });
-    list.appendChild(row);
-  });
-  box.appendChild(list);
-
-  const add = document.createElement("div");
-  add.className = "inv-add";
-  add.innerHTML = `<button class="btn sm" data-k="fan">+ Fans</button>
-                   <button class="btn sm" data-k="strip">+ Fita</button>
-                   <button class="btn sm ghost" data-k="reset">Restaurar sugestao</button>`;
-  add.addEventListener("click", (e) => {
-    const k = e.target.dataset.k;
-    if (!k) return;
-    if (k === "reset") W.inventory = defaultInventory();
-    else W.inventory.push({
-      id: "i" + Date.now().toString(36),
-      label: k === "fan" ? "Novos fans" : "Nova fita",
-      kind: k, pieces: 1, spot: "meio",
-    });
-    saveInventory();
-    renderStep();
-  });
-  box.appendChild(add);
-
-  nav(box, "Cancelar", () => closeWizard(false), "Comecar a contagem", () => {
-    saveInventory();
-    W.step = 1;
-    W.round = 0;
-    renderStep();
-    paintRound();
-  });
-}
-
-function pending() {
-  return W.zones.filter((z) => z.count === null && !z.empty);
-}
-
-function midOf(z) {
-  return Math.ceil((z.lo + z.hi) / 2);
-}
-
-async function paintRound() {
-  const items = pending().map((z) => ({
-    device: z.device, zone: z.zone, index: midOf(z), color: z.color,
-    tail: true,
-  }));
-  if (!items.length) return;
-  try {
-    await API.post("/api/probe/multi/paint", { items });
-  } catch (e) { toast(e.message, true); }
-}
-
-function stepCount(box) {
-  const left = pending();
-  if (!left.length) {
-    W.step = 2;
-    W._verifyIdx = 0;
-    return renderStep();
-  }
-  W.round++;
-  // quantas perguntas ainda faltam, pela maior faixa em aberto: cada uma
-  // corta a faixa pela metade
-  const faltam = Math.max(1, ...left.map((z) => Math.ceil(Math.log2(Math.max(2, z.hi - z.lo + 1)))));
-  const total = W.round - 1 + faltam;
-  const quantos = left.length > 1
-    ? ` Uma resposta avanca os ${left.length} conectores de uma vez.` : "";
-  box.insertAdjacentHTML("beforeend", `
-    <p class="probe-lead">Cada conector acendeu <b>a partir de um ponto ate o
-    fim</b>, numa cor propria. Marque as cores que voce <b>consegue ver agora</b>
-    no gabinete — pode ser um trecho pequeno, basta ver <b>qualquer</b> LED
-    daquela cor.${quantos}</p>
-    <p class="hint" style="margin:-8px 0 12px">Pergunta ${W.round} de cerca de ${total}.</p>`);
-
-  let responder = null;
-  const rotuloResposta = () => {
-    if (responder) responder.textContent = W.seen.size ? "Responder" : "Nao vejo nenhuma dessas cores";
-  };
-  const grid = document.createElement("div");
-  grid.className = "seen-grid";
-  for (const z of left) {
-    const b = document.createElement("button");
-    b.className = "seen" + (W.seen.has(zoneKey(z)) ? " on" : "");
-    b.style.setProperty("--c", z.color);
-    b.innerHTML = `<span class="dot"></span>
-      <span class="nm">${esc(z.name)}</span>
-      <span class="idx">aceso do LED ${midOf(z)} em diante · faixa ${z.lo}–${z.hi}</span>`;
-    b.addEventListener("click", () => {
-      const k = zoneKey(z);
-      if (W.seen.has(k)) W.seen.delete(k); else W.seen.add(k);
-      b.classList.toggle("on", W.seen.has(k));
-      rotuloResposta();
-    });
-    grid.appendChild(b);
-  }
-  box.appendChild(grid);
-  box.insertAdjacentHTML("beforeend",
-    `<p class="hint">Na duvida, olhe o gabinete inteiro antes de responder: se
-     uma cor aparecer em <b>qualquer</b> fan ou fita, marque. Errar um "nao vi"
-     faz a contagem terminar baixa demais — mas o proximo passo confere isso.</p>`);
-
-  const barra = nav(box, "Voltar", () => { W.step = 0; renderStep(); },
-      "Responder", async () => {
-        const vistos = new Set(W.seen);
-        W.seen = new Set();
-        for (const z of left) {
-          const m = midOf(z);
-          if (vistos.has(zoneKey(z))) z.lo = m; else z.hi = m - 1;
-          if (z.hi < 1) { z.empty = true; z.count = 0; }
-          else if (z.lo >= z.hi) z.count = z.lo;
-        }
-        renderStep();
-        await paintRound();
-      });
-  // sem cor marcada, a resposta certa e dizer que nao ve nenhuma; o botao
-  // "Responder" sozinho nao deixava isso claro
-  responder = barra.querySelector(".primary");
-  rotuloResposta();
-}
-
-async function lightVerify(z, n) {
-  try {
-    await API.post("/api/probe/isolate", {
-      device: z.device, zone: z.zone, start: 0,
-      count: n != null ? n : z.count, color: z.color,
-    });
-  } catch (e) {}
-}
-
-function stepVerify(box) {
-  const zs = activeZones();
-  if (!zs.length) {
-    box.insertAdjacentHTML("beforeend",
-      `<p class="probe-lead">Nenhum conector respondeu na contagem. Verifique se
-       os cabos ARGB estao ligados e refaca.</p>`);
-    return nav(box, "Refazer contagem", recontar, "Sair", () => closeWizard(false));
-  }
-
-  const idx = Math.min(W._verifyIdx || 0, zs.length - 1);
-  const z = zs[idx];
-  const maximo = z.max || PROBE_MAX;
-  lightVerify(z);
-
-  box.insertAdjacentHTML("beforeend", `
-    <p class="probe-lead">Acendi <b>${z.count} LEDs</b> no conector
-    <b style="color:${z.color}">${esc(z.name)}</b>, do primeiro ao ultimo.
-    <b>Alguma fan ou pedaco de fita desse conector continua apagado?</b>
-    Se sim, aumente ate tudo acender.</p>`);
-
-  const big = document.createElement("div");
-  big.className = "probe-big";
-  big.innerHTML = `<span id="vfCount">${z.count}</span> <small>LEDs</small>`;
-  box.appendChild(big);
-
-  const sl = document.createElement("input");
-  sl.type = "range";
-  sl.min = 1;
-  sl.max = maximo;
-  sl.value = z.count;
-  box.appendChild(sl);
-
-  const ctrl = document.createElement("div");
-  ctrl.className = "verify-controls";
-  ctrl.innerHTML = `
-    <button class="btn sm" data-d="-5">− 5</button>
-    <button class="btn sm" data-d="-1">− 1</button>
-    <button class="btn sm" data-d="1">+ 1</button>
-    <button class="btn sm" data-d="5">+ 5</button>
-    <button class="btn sm ghost" id="vfMax">Acender o maximo (${maximo})</button>`;
-  box.appendChild(ctrl);
-
-  let timer = null;
-  const setN = (n) => {
-    z.count = clamp(Math.round(n), 1, maximo);
-    $("#vfCount").textContent = z.count;
-    sl.value = z.count;
-    clearTimeout(timer);
-    timer = setTimeout(() => lightVerify(z), 40);
-  };
-  sl.addEventListener("input", () => setN(parseInt(sl.value, 10)));
-  ctrl.querySelectorAll("[data-d]").forEach((b) =>
-    b.addEventListener("click", () => setN(z.count + parseInt(b.dataset.d, 10))));
-  $("#vfMax", ctrl).addEventListener("click", () => {
-    lightVerify(z, maximo);
-    toast(`Acendi ${maximo}. Se acendeu mais coisa, suba o numero ate igualar.`);
-  });
-
-  box.insertAdjacentHTML("beforeend",
-    `<p class="hint">Dica: clique em <b>Acender o maximo</b>. Se acender alguma
-     peca que estava apagada, a contagem esta baixa — suba ate os dois estados
-     ficarem iguais. Conector ${idx + 1} de ${zs.length}.</p>`);
-
-  nav(box, idx > 0 ? "Conector anterior" : "Refazer contagem",
-      () => {
-        if (idx > 0) { W._verifyIdx = idx - 1; renderStep(); }
-        else recontar();
-      },
-      idx < zs.length - 1 ? "Proximo conector" : "Tudo aceso, continuar",
-      () => {
-        if (idx < zs.length - 1) { W._verifyIdx = idx + 1; renderStep(); }
-        else { W._verifyIdx = 0; W._assignIdx = 0; W.step = 3; renderStep(); }
-      });
-}
-
-function activeZones() {
-  return W.zones.filter((z) => (z.count || 0) > 0);
-}
-
-async function stepAssign(box) {
-  const zs = activeZones();
-  if (!zs.length) {
-    box.insertAdjacentHTML("beforeend",
-      `<p class="probe-lead">Nenhum conector respondeu. Verifique se os cabos
-       ARGB estao ligados e tente de novo.</p>`);
-    return nav(box, "Refazer contagem", recontar, "Sair", () => closeWizard(false));
-  }
-
-  const idx = W._assignIdx || 0;
-  const z = zs[Math.min(idx, zs.length - 1)];
-  API.post("/api/probe/isolate", {
-    device: z.device, zone: z.zone, start: 0, count: z.count, color: z.color,
-  }).catch(() => {});
-
-  box.insertAdjacentHTML("beforeend", `
-    <p class="probe-lead">O conector <b style="color:${z.color}">${esc(z.name)}</b>
-    está todo aceso agora (${z.count} LEDs). <b>Quais pecas do seu gabinete
-    acenderam?</b></p>`);
-
-  const cur = new Set(W.assign[zoneKey(z)] || []);
-  const grid = document.createElement("div");
-  grid.className = "pick-grid";
-  for (const it of W.inventory) {
-    const b = document.createElement("button");
-    b.className = "pick" + (cur.has(it.id) ? " on" : "");
-    b.innerHTML = `<span class="t">${esc(it.label)}</span>
-                   <span class="s">${it.pieces} ${it.kind === "fan" ? "peca(s)" : "fita(s)"}</span>`;
-    b.addEventListener("click", () => {
-      if (cur.has(it.id)) cur.delete(it.id); else cur.add(it.id);
-      W.assign[zoneKey(z)] = [...cur];
-      b.classList.toggle("on", cur.has(it.id));
-    });
-    grid.appendChild(b);
-  }
-  box.appendChild(grid);
-  box.insertAdjacentHTML("beforeend",
-    `<p class="hint">Conector ${idx + 1} de ${zs.length}. Se este conector tem um
-     hub com varios grupos, marque todos os que acenderam.</p>`);
-
-  nav(box, idx > 0 ? "Conector anterior" : "Voltar",
-      () => {
-        if (idx > 0) { W._assignIdx = idx - 1; renderStep(); }
-        else { W.step = 2; W._assignIdx = 0; renderStep(); }
-      },
-      idx < zs.length - 1 ? "Proximo conector" : "Continuar",
-      () => {
-        if (idx < zs.length - 1) { W._assignIdx = idx + 1; renderStep(); }
-        else { W._assignIdx = 0; W.step = 4; renderStep(); }
-      });
-}
-
-function piecesOf(z) {
-  const ids = W.assign[zoneKey(z)] || [];
+/** Corta as pecas na contagem do conector; o que passa dela deixa de existir. */
+function cortarPecas(pecas, contagem) {
   const out = [];
-  for (const id of ids) {
-    const it = W.inventory.find((x) => x.id === id);
-    if (it) out.push(it);
+  let acc = 0;
+  for (const p of pecas) {
+    if (acc >= contagem) break;
+    const c = Math.min(p.count, contagem - acc);
+    out.push({ count: c });
+    acc += c;
   }
   return out;
 }
 
-function autoSplit(z) {
-  const items = piecesOf(z);
-  const totalPieces = items.reduce((a, it) => a + it.pieces, 0);
-  const key = zoneKey(z);
-  for (const it of items) {
-    const k = key + "|" + it.id;
-    if (W.perPiece[k] == null) {
-      W.perPiece[k] = totalPieces > 0
-        ? Math.max(1, Math.floor(z.count / totalPieces)) : z.count;
+/** Divisao gravada de um conector, cortada na contagem dele. */
+function pecasSalvas(contas, contagem) {
+  if (!Array.isArray(contas) || !contagem) return [];
+  const pecas = contas.map((n) => ({ count: parseInt(n, 10) || 0 })).filter((p) => p.count > 0);
+  return cortarPecas(pecas, contagem);
+}
+
+// ---- regua: fim das funcoes puras ----
+
+const CAL = {
+  zonas: [],
+  atual: 0,
+  modo: "ate",
+  busy: false,
+  aplicado: null,
+  pintando: false,
+  pendente: null,
+  timer: null,
+};
+
+const CAL_DICAS = {
+  ate: `Clique no ultimo LED que acende. No gabinete, do 1 ate ele fica
+    <b>verde</b>, ele mesmo fica <b>branco</b> e o resto do conector fica
+    <b>vermelho</b>. Se aparecer vermelho em qualquer lugar, ainda tem LED
+    depois. <b>O que fica verde e o que vai ser salvo.</b>`,
+  so: `So o LED clicado acende, em <b>branco</b>. Serve para ver onde cada
+    numero fica no gabinete. Aqui o cursor nao muda a contagem.`,
+  pecas: `Cada peca acende numa cor. Cinza e LED sem peca e <b>vermelho</b> e
+    LED depois do ultimo LED do conector. Aqui o cursor nao muda a contagem.`,
+};
+
+function zonaAtual() { return CAL.zonas[CAL.atual]; }
+
+/** Pecas que cabem na contagem de agora. A lista inteira fica guardada:
+ *  descer o cursor e subir de novo devolve as pecas que tinham saido. */
+function pecasValidas(z) { return cortarPecas(z.pecas, z.contagem); }
+
+/** Diz se o mapa salvo da zona e um plano de varias pecas. Ele foi feito
+ *  para uma contagem; mudando a contagem, a zona volta ao automatico. */
+function temPlanoNoMapa(device, zone) {
+  const zi = (S.zones || []).find((x) => x.device_key === device && x.zone_index === zone);
+  return !!(zi && zi.geometry && zi.geometry.shape === "multi");
+}
+
+/** Abre a configuracao. Com uma lista, comeca no primeiro conector dela. */
+async function startWizard(list) {
+  if (CAL.busy || !$("#probeModal").hidden) return;
+  CAL.busy = true;
+  try {
+    const r = await API.post("/api/probe/multi/start", { max: 512 });
+    if (!r.ok) return toast(r.error || "nao consegui iniciar", true);
+    CAL.zonas = r.zones.map((z) => {
+      const antes = Math.max(0, Math.min(z.antes || 0, z.max));
+      const salvas = ((S.state && S.state.pecas) || {})[`${z.device}:${z.zone}`];
+      return {
+        device: z.device, zone: z.zone, nome: z.zone_name,
+        aparelho: z.device_name, max: Math.max(1, z.max), antes,
+        contagem: antes, cursor: antes,
+        pecas: pecasSalvas(salvas, antes),
+        tinhaPlano: temPlanoNoMapa(z.device, z.zone),
+        mexeuPecas: false,
+        // conector que a pessoa nem abriu nao vira "vazio" gravado
+        respondido: false,
+      };
+    });
+    CAL.atual = 0;
+    if (list && list.length) {
+      const i = CAL.zonas.findIndex((z) => z.device === list[0].device && z.zone === list[0].zone);
+      if (i >= 0) CAL.atual = i;
+    }
+    CAL.modo = "ate";
+    CAL.aplicado = null;
+    render();
+    openModal("#probeModal", $("#calRegua"));
+    pintar();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    CAL.busy = false;
+  }
+}
+
+function openProbe(device, zone) {
+  return startWizard([{ device, zone }]);
+}
+
+/** Manda para o gabinete o estado da regua. So vai o ultimo pedido: com a
+ *  seta segurada, os do meio seriam pintados atrasados um atras do outro. */
+function pintar() {
+  clearTimeout(CAL.timer);
+  CAL.timer = setTimeout(() => {
+    const z = zonaAtual();
+    if (!z) return;
+    CAL.pendente = {
+      device: z.device, zone: z.zone,
+      cores: coresDaRegua(CAL.modo, z.cursor, z.max, z.contagem, pecasValidas(z)),
+    };
+    if (!CAL.pintando) enviaPintura();
+  }, 30);
+}
+
+async function enviaPintura() {
+  CAL.pintando = true;
+  while (CAL.pendente) {
+    const corpo = CAL.pendente;
+    CAL.pendente = null;
+    try {
+      const r = await API.post("/api/probe/pintar", corpo);
+      if (!r.ok) toast(r.error || "nao consegui acender", true);
+    } catch (e) {
+      toast(e.message, true);
     }
   }
-  return items;
+  CAL.pintando = false;
 }
 
-function splitTotal(z, items) {
-  const key = zoneKey(z);
-  return items.reduce((a, it) => a + (W.perPiece[key + "|" + it.id] || 0) * it.pieces, 0);
+function mudou() {
+  render();
+  pintar();
 }
 
-let splitTimer = null;
-function previewSplitSoon(z, items) {
-  clearTimeout(splitTimer);
-  splitTimer = setTimeout(() => previewSplit(z, items), 120);
+function moverCursor(n) {
+  const z = zonaAtual();
+  const minimo = CAL.modo === "so" ? 1 : 0;
+  z.cursor = clamp(Math.round(n), minimo, z.max);
+  const nova = contagemDoCursor(CAL.modo, z.cursor, z.contagem);
+  if (nova !== z.contagem) {
+    z.contagem = nova;
+    z.respondido = true;
+  }
+  mudou();
 }
 
-async function previewSplit(z, items) {
-  const key = zoneKey(z);
-  const sizes = items.flatMap((it) => Array(it.pieces).fill(W.perPiece[key + "|" + it.id] || 0));
-  if (!sizes.length) return;
-  await API.post("/api/probe/split", {
-    device: z.device, zone: z.zone, size: Math.max(1, sizes[0]),
-    total: Math.min(z.count, sizes.reduce((a, b) => a + b, 0)),
-  }).catch(() => {});
+function render() {
+  renderConectores();
+  renderCorpo();
 }
 
-function stepSplit(box) {
-  const zs = activeZones().filter((z) => piecesOf(z).length);
-  if (!zs.length) { W.step = 5; return renderStep(); }
+function rotuloConector(z) {
+  if (!z.contagem) return "sem LEDs";
+  const n = pecasValidas(z).length;
+  return n ? `${z.contagem} LEDs · ${n} pecas` : `${z.contagem} LEDs`;
+}
 
-  const idx = Math.min(W._splitIdx || 0, zs.length - 1);
-  const z = zs[idx];
-  const items = autoSplit(z);
-  previewSplitSoon(z, items);
+function renderConectores() {
+  const box = $("#calConectores");
+  box.innerHTML = "";
+  CAL.zonas.forEach((z, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "cal-con" + (i === CAL.atual ? " on" : "");
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", i === CAL.atual ? "true" : "false");
+    b.innerHTML = `<b>${esc(z.nome)}</b><span>${esc(rotuloConector(z))}</span>`;
+    b.addEventListener("click", () => {
+      if (i === CAL.atual) return;
+      CAL.atual = i;
+      if (CAL.modo === "ate") zonaAtual().cursor = zonaAtual().contagem;
+      if (CAL.modo === "so" && zonaAtual().cursor < 1) zonaAtual().cursor = 1;
+      mudou();
+      $("#calRegua")?.focus();
+    });
+    box.appendChild(b);
+  });
+}
 
-  const used = splitTotal(z, items);
-  const diff = z.count - used;
+function renderCorpo() {
+  const z = zonaAtual();
+  const box = $("#probeBody");
+  const focoNaRegua = document.activeElement && document.activeElement.id === "calRegua";
+  box.innerHTML = "";
+  if (!z) return;
 
   box.insertAdjacentHTML("beforeend", `
-    <p class="probe-lead">O conector <b style="color:${z.color}">${esc(z.name)}</b>
-    tem <b>${z.count} LEDs</b>. Dividindo entre as pecas que voce marcou, cada
-    uma fica com o valor abaixo. As cores no gabinete mostram onde uma peca
-    termina e a outra comeca — ajuste se as fronteiras nao baterem.</p>`);
+    <div class="cal-topo">
+      <div class="cal-modos" role="group" aria-label="O que acender">
+        ${[["ate", "Ate aqui"], ["so", "So este LED"], ["pecas", "Ver pecas"]].map(([m, t]) =>
+          `<button type="button" class="btn sm${CAL.modo === m ? " on" : ""}" data-modo="${m}"
+             aria-pressed="${CAL.modo === m}">${t}</button>`).join("")}
+      </div>
+      <span class="cal-aparelho">${esc(z.aparelho)}</span>
+    </div>
+    <p class="probe-lead cal-dica">${CAL_DICAS[CAL.modo]}</p>
+    <div class="cal-cursor">
+      <span class="cal-num">LED <b>${z.cursor}</b> <small>de ${z.max}</small></span>
+      <div class="cal-passos">
+        <button type="button" class="btn sm" data-d="-10">-10</button>
+        <button type="button" class="btn sm" data-d="-1">-1</button>
+        <button type="button" class="btn sm" data-d="1">+1</button>
+        <button type="button" class="btn sm" data-d="10">+10</button>
+      </div>
+    </div>`);
 
-  const wrap = document.createElement("div");
-  wrap.className = "split-list";
-  for (const it of items) {
-    const k = zoneKey(z) + "|" + it.id;
+  $$("[data-modo]", box).forEach((b) => b.addEventListener("click", () => {
+    CAL.modo = b.dataset.modo;
+    // voltando ao "ate", o cursor mostra a contagem em vez de troca-la
+    if (CAL.modo === "ate") z.cursor = z.contagem;
+    if (CAL.modo === "so" && z.cursor < 1) z.cursor = 1;
+    mudou();
+  }));
+  $$(".cal-passos [data-d]", box).forEach((b) =>
+    b.addEventListener("click", () => moverCursor(z.cursor + parseInt(b.dataset.d, 10))));
+
+  box.appendChild(regua(z));
+
+  box.insertAdjacentHTML("beforeend", `<div class="cal-legenda">${legenda()}</div>`);
+
+  const acoes = document.createElement("div");
+  acoes.className = "cal-acoes";
+  acoes.innerHTML = `
+    <button type="button" class="btn sm primary" data-a="peca" ${z.cursor < 1 ? "disabled" : ""}>Fim de uma peca no LED ${z.cursor}</button>
+    <button type="button" class="btn sm ghost" data-a="vazio">Conector vazio</button>`;
+  acoes.addEventListener("click", (e) => {
+    const a = e.target.closest("[data-a]");
+    if (!a || a.disabled) return;
+    z.respondido = true;
+    if (a.dataset.a === "peca") {
+      z.pecas = marcarFim(z.pecas, z.cursor);
+      z.contagem = Math.max(z.contagem, z.cursor);
+      z.mexeuPecas = true;
+    } else {
+      z.contagem = 0;
+      z.cursor = 0;
+      if (z.pecas.length) z.mexeuPecas = true;
+      z.pecas = [];
+    }
+    mudou();
+  });
+  box.appendChild(acoes);
+
+  box.appendChild(resumo(z));
+  box.appendChild(tabelaPecas(z));
+
+  const barra = document.createElement("div");
+  barra.className = "probe-actions";
+  barra.innerHTML = `
+    <button type="button" class="btn sm" id="calSair">Sair sem salvar</button>
+    <button type="button" class="btn primary" id="calSalvar">Salvar tudo</button>`;
+  $("#calSair", barra).addEventListener("click", sairDoAssistente);
+  $("#calSalvar", barra).addEventListener("click", salvarTudo);
+  box.appendChild(barra);
+
+  if (focoNaRegua) $("#calRegua").focus();
+}
+
+function regua(z) {
+  const fins = new Set(fimDasPecas(pecasValidas(z)));
+  const el = document.createElement("div");
+  el.id = "calRegua";
+  el.className = "cal-regua";
+  el.tabIndex = 0;
+  el.setAttribute("role", "slider");
+  el.setAttribute("aria-label", `LED do conector ${z.nome}`);
+  el.setAttribute("aria-valuemin", CAL.modo === "so" ? "1" : "0");
+  el.setAttribute("aria-valuemax", String(z.max));
+  el.setAttribute("aria-valuenow", String(z.cursor));
+  const cores = coresDaRegua(CAL.modo, z.cursor, z.max, z.contagem, pecasValidas(z));
+  let html = "";
+  for (let led = 1; led <= z.max; led++) {
+    const cor = cores.slice((led - 1) * 6, led * 6);
+    const cls = ["led"];
+    if (led === z.cursor) cls.push("cur");
+    if (fins.has(led)) cls.push("fim-peca");
+    if (led === z.contagem) cls.push("fim-con");
+    if (led > z.contagem) cls.push("alem");
+    const marca = led % 10 === 0 || led === 1 ? `<i>${led}</i>` : "";
+    // apagado na regua vira o fundo das celulas, senao a grade some no
+    // modo de um LED so
+    const fundo = cor === CAL_APAGADO ? "var(--line)" : "#" + cor;
+    html += `<span class="${cls.join(" ")}" data-led="${led}" style="--c:${fundo}" title="LED ${led}">${marca}</span>`;
+  }
+  el.innerHTML = html;
+  el.addEventListener("click", (e) => {
+    const c = e.target.closest("[data-led]");
+    if (c) moverCursor(parseInt(c.dataset.led, 10));
+  });
+  el.addEventListener("keydown", (e) => {
+    const passo = e.shiftKey ? 10 : 1;
+    const mapa = { ArrowRight: passo, ArrowUp: passo, ArrowLeft: -passo, ArrowDown: -passo };
+    if (e.key in mapa) { e.preventDefault(); moverCursor(z.cursor + mapa[e.key]); }
+    else if (e.key === "Home") { e.preventDefault(); moverCursor(0); }
+    else if (e.key === "End") { e.preventDefault(); moverCursor(z.max); }
+  });
+  return el;
+}
+
+function legenda() {
+  const cor = (c, t) => `<span><i class="lg" style="--c:#${c}"></i>${t}</span>`;
+  const itens = {
+    ate: [cor(CAL_VERDE, "aceso ate o cursor"), cor(CAL_VERMELHO, "depois do cursor")],
+    so: [cor(CAL_BRANCO, "o LED do cursor")],
+    pecas: [cor(CAL_CORES_PECAS[0], "uma cor por peca"), cor(CAL_SOBRA, "sem peca"),
+            cor(CAL_VERMELHO, "depois do ultimo LED")],
+  }[CAL.modo];
+  return [...itens,
+    `<span><i class="lg cur"></i>cursor</span>`,
+    `<span><i class="lg fim-peca"></i>fim de peca</span>`,
+    `<span><i class="lg fim-con"></i>ultimo LED do conector</span>`].join("");
+}
+
+function resumo(z) {
+  const el = document.createElement("p");
+  el.className = "cal-resumo";
+  if (!z.contagem) {
+    el.innerHTML = `Este conector esta <b>sem LEDs</b>. Em <b>Ate aqui</b>,
+      clique no ultimo LED que acende. Sem nada ligado nele, use
+      <b>Conector vazio</b>.`;
+    return el;
+  }
+  const pecas = pecasValidas(z);
+  const soma = pecas.reduce((a, p) => a + p.count, 0);
+  const contas = pecas.length ? `Pecas: ${pecas.map((p) => p.count).join(" + ")} = ${soma}.` : "";
+  const sobra = pecas.length && soma < z.contagem
+    ? ` <span class="warn">Sobram ${z.contagem - soma} LEDs sem peca.</span>` : "";
+  el.innerHTML = `Conector com <b>${z.contagem} LEDs</b>. ${contas}${sobra}`;
+  return el;
+}
+
+function tabelaPecas(z) {
+  const box = document.createElement("div");
+  box.className = "cal-pecas";
+  const pecas = pecasValidas(z);
+  if (!pecas.length) {
+    box.innerHTML = `<p class="hint">Sem pecas marcadas. Para saber quantos LEDs
+      cada fan, fita ou placa tem, va ate o ultimo LED de cada uma e clique em
+      <b>Fim de uma peca</b>.</p>`;
+    return box;
+  }
+  let ini = 1;
+  pecas.forEach((p, i) => {
+    const fim = ini + p.count - 1;
     const row = document.createElement("div");
-    row.className = "split-row";
+    row.className = "cal-peca";
+    row.style.setProperty("--c", "#" + CAL_CORES_PECAS[i % CAL_CORES_PECAS.length]);
     row.innerHTML = `
-      <span class="nm">${esc(it.label)}</span>
-      <span class="mult">${it.pieces} x</span>
-      <button class="mini" data-d="-1">−</button>
-      <input type="number" min="1" max="${z.count}" value="${W.perPiece[k]}">
-      <button class="mini" data-d="1">+</button>
-      <span class="tot">= ${W.perPiece[k] * it.pieces} LEDs</span>`;
-    const inp = row.querySelector("input");
-    const bump = (d) => {
-      W.perPiece[k] = Math.max(1, (W.perPiece[k] || 1) + d);
-      renderStep();
-    };
-    row.querySelectorAll(".mini").forEach((b) =>
-      b.addEventListener("click", () => bump(parseInt(b.dataset.d, 10))));
-    inp.addEventListener("change", () => {
-      W.perPiece[k] = Math.max(1, parseInt(inp.value, 10) || 1);
-      renderStep();
+      <button type="button" class="cal-faixa" title="Levar o cursor ao fim desta peca">
+        <i class="dot"></i><span class="nm">Peca ${i + 1}</span>
+        <span class="faixa">LEDs ${ini} a ${fim}</span><b>${p.count} LEDs</b></button>
+      <button type="button" class="inv-del" title="Juntar com a proxima peca"
+        aria-label="Tirar o fim da peca ${i + 1}">&times;</button>`;
+    $(".cal-faixa", row).addEventListener("click", () => {
+      if (CAL.modo === "so") CAL.modo = "pecas";
+      moverCursor(fim);
     });
-    wrap.appendChild(row);
-  }
-  box.appendChild(wrap);
-
-  const cls = diff === 0 ? "ok" : (diff > 0 ? "warn" : "err");
-  const msg = diff === 0 ? "bate exatamente com os LEDs do conector"
-    : diff > 0 ? `sobram ${diff} LEDs sem peca atribuida`
-    : `faltam ${-diff} LEDs: a soma passou do total do conector`;
-  box.insertAdjacentHTML("beforeend",
-    `<p class="split-sum ${cls}">${used} de ${z.count} LEDs — ${msg}</p>`);
-
-  nav(box, idx > 0 ? "Conector anterior" : "Voltar",
-      () => {
-        if (idx > 0) { W._splitIdx = idx - 1; renderStep(); }
-        else { W._splitIdx = 0; W.step = 3; renderStep(); }
-      },
-      idx < zs.length - 1 ? "Proximo conector" : "Ver resumo",
-      () => {
-        if (idx < zs.length - 1) { W._splitIdx = idx + 1; renderStep(); }
-        else { W._splitIdx = 0; W.step = 5; renderStep(); }
-      },
-      diff < 0);
+    $(".inv-del", row).addEventListener("click", () => {
+      z.pecas = tirarFim(z.pecas, i);
+      z.mexeuPecas = true;
+      mudou();
+    });
+    box.appendChild(row);
+    ini = fim + 1;
+  });
+  return box;
 }
 
-function stepApply(box) {
-  const zs = activeZones();
-  box.insertAdjacentHTML("beforeend",
-    `<p class="probe-lead">Confira e aplique. Isto grava a contagem de cada
-     conector e monta o mapa fisico: cada fan vira um anel na posicao que voce
-     indicou, cada fita vira uma linha.</p>`);
-
-  const t = document.createElement("div");
-  t.className = "sum-list";
-  for (const z of W.zones) {
-    if (!z.count) {
-      t.insertAdjacentHTML("beforeend",
-        `<div class="sum-row empty"><b>${esc(z.name)}</b><span>vazio — nenhum LED respondeu</span></div>`);
-      continue;
-    }
-    const items = piecesOf(z);
-    const desc = items.length
-      ? items.map((it) => `${it.pieces}x ${esc(it.label)} (${W.perPiece[zoneKey(z) + "|" + it.id]} LEDs cada)`).join("<br>")
-      : planoVencido(z)
-        ? "sem pecas atribuidas — o plano antigo nao bate com a contagem e volta ao posicionamento automatico"
-        : "sem pecas atribuidas — o mapa atual fica como esta";
-    t.insertAdjacentHTML("beforeend",
-      `<div class="sum-row"><b style="color:${z.color}">${esc(z.name)}</b>
-       <span><b>${z.count} LEDs</b><br>${desc}</span></div>`);
-  }
-  box.appendChild(t);
-
-  nav(box, "Voltar", () => { W.step = 4; renderStep(); },
-      "Aplicar tudo", () => applyAll());
+function temMudanca() {
+  return CAL.zonas.some((z) => z.respondido || z.contagem !== z.antes || z.mexeuPecas);
 }
 
-/** Grava tudo, em tres fases. Cada fase concluida fica anotada: se uma
- *  falhar, o botao volta como "Tentar de novo" e pula o que ja foi feito.
- *  Antes o botao ficava travado em "Aplicando", e repetir nao funcionaria,
- *  porque depois de fechar a sondagem as contagens ja nao tem para onde ir. */
-async function applyAll() {
-  if (W.busy) return;
-  W.busy = true;
-  const btn = $("#probeBody .probe-actions .primary");
-  const back = $("#probeBody .probe-actions .btn:not(.primary)");
-  if (back) back.disabled = true;
-  $("#probeCancel").disabled = true;
-  if (btn) { btn.disabled = true; btn.textContent = "Aplicando…"; }
-  const feito = W.aplicado || (W.aplicado = { commits: false, finish: false, mapas: new Set() });
+/** Grava tudo em tres fases. Cada fase concluida fica anotada: se uma
+ *  falhar, o botao volta como "Tentar de novo" e pula o que ja foi feito. */
+async function salvarTudo() {
+  if (CAL.busy) return;
+  CAL.busy = true;
+  const btn = $("#calSalvar");
+  if (btn) { btn.disabled = true; btn.textContent = "Salvando…"; }
+  const feito = CAL.aplicado || (CAL.aplicado = { contagens: false, fim: false, mapas: new Set() });
   try {
-    if (!feito.commits) {
-      for (const z of W.zones) {
-        await API.post("/api/probe/commit", {
-          device: z.device, zone: z.zone, count: z.count || 0 });
+    if (!feito.contagens) {
+      for (const z of CAL.zonas) {
+        if (!z.respondido && z.contagem === z.antes) continue;
+        await API.post("/api/probe/commit", { device: z.device, zone: z.zone, count: z.contagem });
       }
-      feito.commits = true;
+      feito.contagens = true;
     }
-    if (!feito.finish) {
+    if (!feito.fim) {
       await API.post("/api/probe/finish", {});
-      feito.finish = true;
+      feito.fim = true;
     }
-
-    for (const z of activeZones()) {
-      if (feito.mapas.has(zoneKey(z))) continue;
-      const items = piecesOf(z);
-      if (!items.length) {
-        // Sem peca marcada, o plano de uma rodada anterior com contagens que
-        // ja nao batem da lugar ao posicionamento automatico.
-        if (planoVencido(z))
-          await API.post("/api/zone/geometry", {
-            device: z.device, zone: z.zone, geometry: null });
-      } else {
-        const parts = [];
-        for (const it of items) {
-          const c = W.perPiece[zoneKey(z) + "|" + it.id] || 0;
-          for (let i = 0; i < it.pieces; i++)
-            parts.push({ kind: it.kind, count: c, spot: it.spot,
-                         lanes: it.lanes || 12 });
-        }
-        await API.post("/api/zone/plan", {
-          device: z.device, zone: z.zone, parts });
-      }
-      feito.mapas.add(zoneKey(z));
+    for (const z of CAL.zonas) {
+      const k = `${z.device}:${z.zone}`;
+      if (feito.mapas.has(k) || (!z.mexeuPecas && z.contagem === z.antes)) continue;
+      await API.post("/api/zone/pecas", {
+        device: z.device, zone: z.zone, pecas: pecasValidas(z).map((p) => p.count) });
+      // plano de pecas do mapa feito para outra contagem volta ao automatico
+      if (z.tinhaPlano && z.contagem !== z.antes)
+        await API.post("/api/zone/geometry", { device: z.device, zone: z.zone, geometry: null });
+      feito.mapas.add(k);
     }
-    W.aplicado = null;
+    CAL.aplicado = null;
     closeModal("#probeModal");
-    toast(`Configurado: ${W.zones.filter((z) => z.count)
-      .map((z) => `${z.name} = ${z.count}`).join(", ")}`);
+    toast(`Salvo: ${CAL.zonas.map((z) => `${z.nome} = ${z.contagem}`).join(", ")}`);
   } catch (e) {
-    const falta = !feito.commits ? "Nada foi gravado ainda."
-      : !feito.finish ? "As contagens foram enviadas, mas nao foram gravadas."
-      : "As contagens foram gravadas, mas o mapa de algum conector nao foi montado.";
+    const falta = !feito.contagens ? "Nada foi gravado ainda."
+      : !feito.fim ? "As contagens foram enviadas, mas nao foram gravadas."
+      : "As contagens foram gravadas, mas a divisao em pecas de algum conector nao.";
     toast(`${e.message}. ${falta}`, true);
     if (btn) { btn.disabled = false; btn.textContent = "Tentar de novo"; }
-    if (back) back.disabled = feito.finish;
   } finally {
-    W.busy = false;
-    $("#probeCancel").disabled = false;
+    CAL.busy = false;
   }
+  await depoisDeFechar();
+}
+
+async function depoisDeFechar() {
   await refreshState();
   renderSetupBanner();
   renderPresets();
@@ -709,13 +513,22 @@ async function applyAll() {
   if ($("#tab-layout").classList.contains("active")) drawLayout();
 }
 
-function sairDoAssistente() {
-  if (W.busy) return;
-  if (W.step > 0 && !(W.aplicado && W.aplicado.finish) && !confirm(
-      "Sair do assistente? As contagens descobertas ate aqui sao descartadas.")) {
+async function sairDoAssistente() {
+  if (CAL.busy) return;
+  const jaGravou = CAL.aplicado && CAL.aplicado.fim;
+  if (!jaGravou && temMudanca() &&
+      !confirm("Sair sem salvar? O que voce marcou nesta configuracao se perde.")) return;
+  CAL.busy = true;
+  try {
+    if (!jaGravou) await API.post("/api/probe/finish", {});
+    closeModal("#probeModal");
+  } catch (e) {
+    toast(`${e.message} A configuracao continua aberta; tente sair de novo.`, true);
     return;
+  } finally {
+    CAL.busy = false;
   }
-  closeWizard(false);
+  await depoisDeFechar();
 }
 
 document.addEventListener("DOMContentLoaded", () => {

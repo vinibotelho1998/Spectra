@@ -1779,8 +1779,15 @@ class SpectraApp:
                 "falhou": falhou}
 
     def setup_todo(self) -> list:
-        """Lista o que ainda falta configurar, para a interface avisar."""
-        return [z for z in self.resizable_zones() if z["count"] == 0]
+        """Lista o que ainda falta configurar, para a interface avisar.
+
+        Conector marcado como vazio tem o zero gravado e sai da lista: a
+        resposta ja foi dada, e o aviso voltava em toda abertura.
+        """
+        gravadas = self.config.get("zone_sizes") or {}
+        return [z for z in self.resizable_zones()
+                if z["count"] == 0
+                and f"{z['device']}:{z['zone']}" not in gravadas]
 
     def resizable_zones(self) -> list:
         """Lista as zonas cuja contagem de LEDs pode ser informada."""
@@ -1892,6 +1899,33 @@ class SpectraApp:
             buf[a:z, :3] = (r, g, b)
             self._paint_zone(dev, zone, buf)
             return {"ok": True, "lit": z - a}
+
+    def probe_pintar(self, device_key_: str, zone_index: int, cores):
+        """Pinta um conector LED a LED com as cores da regua da interface.
+
+        `cores` traz seis digitos hexadecimais por LED, do primeiro em diante.
+        LED sem cor fica apagado e cor alem do conector e ignorada. Os outros
+        conectores apagam, para so o que esta em teste aparecer no gabinete.
+        """
+        with self._lock:
+            if getattr(self, "_probe_session", None) is None:
+                return {"ok": False, "error": "nenhuma sondagem em andamento"}
+            dev, zone = self._find_zone(device_key_, zone_index)
+            if dev is None or zone is None:
+                return {"ok": False, "error": "zona nao encontrada"}
+            texto = cores if isinstance(cores, str) else ""
+            n = min(zone.leds_count, len(texto) // 6)
+            try:
+                rgb = bytes.fromhex(texto[:n * 6])
+            except ValueError:
+                return {"ok": False, "error": "cores ilegiveis"}
+            self.renderer.blank()
+            buf = np.zeros((zone.leds_count, 4), dtype=np.uint8)
+            if n:
+                buf[:n, :3] = np.frombuffer(rgb, dtype=np.uint8).reshape(n, 3)
+            if not self._paint_zone(dev, zone, buf):
+                return {"ok": False, "error": "o OpenRGB recusou a pintura"}
+            return {"ok": True, "lit": n}
 
     def identify_zone(self, device_key_: str, zone_index: int,
                       seconds: float = 1.6, color: str = "#ffffff"):
@@ -2136,6 +2170,30 @@ class SpectraApp:
         self.save_config()
         return {"ok": True}
 
+    def set_pecas(self, device_key_: str, zone_index: int, pecas) -> dict:
+        """Grava em quantos LEDs cada peca de um conector se divide.
+
+        So a conta, para a regua da calibracao reabrir mostrando as pecas.
+        O mapa do gabinete fica como esta. Lista vazia apaga a divisao.
+        """
+        if not isinstance(pecas, list) or len(pecas) > 64:
+            return {"ok": False, "error": "divisao invalida"}
+        try:
+            contas = [int(n) for n in pecas]
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "divisao invalida"}
+        if any(n <= 0 for n in contas) or sum(contas) > 512:
+            return {"ok": False, "error": "divisao invalida"}
+        with self._lock:
+            todas = self.config.setdefault("pecas", {})
+            chave = f"{device_key_}:{zone_index}"
+            if contas:
+                todas[chave] = contas
+            else:
+                todas.pop(chave, None)
+            self.save_config()
+        return {"ok": True}
+
     def mostrar_janela(self) -> dict:
         """Mostra a janela do app, a pedido de uma segunda abertura."""
         cb = self.ao_mostrar_janela
@@ -2194,6 +2252,7 @@ class SpectraApp:
             "autostart_openrgb": self.config.get("autostart_openrgb", True),
             "favoritos": list(self.config.get("favoritos") or []),
             "inventario": self.config.get("inventario"),
+            "pecas": self.config.get("pecas") or {},
             "assistente_ativo": getattr(self, "_probe_session", None) is not None,
         }
         if not r:

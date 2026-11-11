@@ -41,7 +41,8 @@ PRECISA_MOTOR = {
     "/api/layout", "/api/layout/reset", "/api/probe/start",
     "/api/probe/paint", "/api/probe/stop", "/api/probe/commit",
     "/api/probe/multi/start", "/api/probe/multi/paint", "/api/probe/split",
-    "/api/probe/isolate", "/api/zone/identify", "/api/zone/plan",
+    "/api/probe/isolate", "/api/probe/pintar", "/api/zone/identify",
+    "/api/zone/plan",
     "/api/preset/apply", "/api/profile/save", "/api/profile/load",
 }
 
@@ -320,6 +321,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(a.probe_isolate(
                     b["device"], int(b["zone"]), int(b["start"]),
                     int(b["count"]), b.get("color", "#ffffff")))
+            elif p == "/api/probe/pintar":
+                return self._json(a.probe_pintar(
+                    b["device"], int(b["zone"]), b.get("cores", "")))
             elif p == "/api/zone/identify":
                 return self._json(a.identify_zone(
                     b["device"], int(b["zone"]),
@@ -338,6 +342,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": a.delete_profile(b["name"])})
             elif p == "/api/favoritos":
                 return self._json(a.set_favoritos(b.get("ids")))
+            elif p == "/api/zone/pecas":
+                return self._json(a.set_pecas(b["device"], int(b["zone"]),
+                                              b.get("pecas")))
             elif p == "/api/inventario":
                 return self._json(a.set_inventario(b.get("itens")))
             elif p == "/api/janela/mostrar":
