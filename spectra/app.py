@@ -68,6 +68,12 @@ OPENRGB_TASK = "Spectra - OpenRGB SDK Server"
 OPENRGB_ARGS = ["--server", "--startminimized"]
 # A porta SDK pode abrir antes de a varredura de hardware terminar.
 ESTABILIZACAO_DISPOSITIVOS = 3.0
+# Ate onde a conexao apaga o fim de cada conector ARGB. E o mesmo teto do
+# campo de contagem; o conector que aceita menos para no proprio maximo.
+TETO_LIMPEZA_CAUDA = 512
+# Tempo para o OpenRGB entregar o preto ao controlador antes de a zona
+# voltar a contagem salva.
+ESPERA_LIMPEZA_CAUDA = 0.2
 
 CASE_SPOTS = {
     "topo_esq":     (0.22, 0.10), "topo_centro": (0.50, 0.10),
@@ -928,6 +934,7 @@ class SpectraApp:
         # O estado informado pelo SDK pode nao refletir o hardware apos
         # abrir o OpenRGB. Reaplica o modo direto em cada conexao.
         self.renderer.arm_direct(force=True)
+        self._apaga_alem_da_contagem()
         self._liga_teclado()
         self.renderer.start()
         self._sync_sources()
@@ -1028,6 +1035,54 @@ class SpectraApp:
             time.sleep(0.6)
             try:
                 devices[:] = self.client.load_devices()
+            except OpenRGBError:
+                pass
+
+    def _apaga_alem_da_contagem(self):
+        """Apaga os LEDs que ficam depois da contagem de cada conector ARGB.
+
+        Conector de 3 pinos e via unica: o controlador so manda dado ate a
+        contagem configurada, e o LED que vem depois guarda a ultima cor que
+        recebeu, em geral o efeito da placa-mae no boot. Era a luz da placa de
+        video presa numa cor com todo o resto apagado. Estica cada zona ate o
+        teto, manda preto e volta a contagem de antes.
+        """
+        r = self.renderer
+        esticadas = []
+        for dev in r.all_devices:
+            if not r.direct_ok.get(dev.index):
+                continue
+            for zone in dev.zones:
+                if zone.leds_min == zone.leds_max:
+                    continue
+                teto = min(zone.leds_max, TETO_LIMPEZA_CAUDA)
+                antes = zone.leds_count
+                if teto <= antes:
+                    continue
+                try:
+                    self.client.resize_zone(dev.index, zone.index, teto)
+                except OpenRGBError:
+                    continue
+                esticadas.append((dev.index, zone.index, antes))
+                try:
+                    self.client.update_zone_leds(
+                        dev.index, zone.index, b"\x00\x00\x00\x00" * teto, teto)
+                except OpenRGBError:
+                    pass
+        if not esticadas:
+            return
+        time.sleep(ESPERA_LIMPEZA_CAUDA)
+        voltou = True
+        for di, zi, antes in esticadas:
+            try:
+                self.client.resize_zone(di, zi, antes)
+            except OpenRGBError:
+                voltou = False
+        if not voltou:
+            # Zona que ficou esticada no servidor desalinha o mapa inteiro
+            # do dispositivo; o renderizador passa a usar a lista real.
+            try:
+                r.set_devices(self.client.load_devices())
             except OpenRGBError:
                 pass
 

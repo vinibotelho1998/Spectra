@@ -2165,6 +2165,11 @@ def _app_novo(monkeypatch, devices):
     return b
 
 
+def _esperas_da_descoberta(tempo):
+    """Esperas da conexao sem a da limpeza do fim dos conectores."""
+    return [s for s in tempo.esperas if s != app_mod.ESPERA_LIMPEZA_CAUDA]
+
+
 class TestConexaoCompleta:
 
     @pytest.mark.skipif(sys.platform != "win32", reason="elevacao do OpenRGB no Windows")
@@ -2214,8 +2219,50 @@ class TestConexaoCompleta:
         b.client.resize_zone = lambda i, zi, n: pedidos.append((i, zi, n)) or real(i, zi, n)
         try:
             assert b.connect() is True
-            assert pedidos == [(0, 0, 20)]
+            # a limpeza do fim dos conectores vem depois e devolve a contagem
+            assert pedidos[0] == (0, 0, 20)
+            assert _conta(b, 0, 0) == 20
             assert b.renderer.canvas.n == 20 + 4 + 3
+        finally:
+            b.renderer.stop()
+
+    def test_conexao_apaga_o_led_depois_da_contagem(self, spectra, monkeypatch,
+                                                    sem_espera):
+        b = _app_novo(monkeypatch, _bancada())
+        passos = []
+        resize, zona = b.client.resize_zone, b.client.update_zone_leds
+        b.client.resize_zone = lambda i, zi, n: (
+            passos.append(("conta", i, zi, n)) or resize(i, zi, n))
+        b.client.update_zone_leds = lambda i, zi, cores, n: (
+            passos.append(("cor", i, zi, n, set(cores))) or zona(i, zi, cores, n))
+        try:
+            assert b.connect() is True
+            teto = app_mod.TETO_LIMPEZA_CAUDA
+            assert passos == [("conta", 0, 0, teto), ("cor", 0, 0, teto, {0}),
+                              ("conta", 0, 1, teto), ("cor", 0, 1, teto, {0}),
+                              ("conta", 0, 0, 8), ("conta", 0, 1, 4)]
+            assert app_mod.ESPERA_LIMPEZA_CAUDA in sem_espera.esperas
+            assert (_conta(b, 0, 0), _conta(b, 0, 1)) == (8, 4)
+            assert b.renderer.canvas.n == 15
+        finally:
+            b.renderer.stop()
+
+    def test_zona_que_nao_volta_da_limpeza_realinha_o_mapa(self, spectra,
+                                                           monkeypatch,
+                                                           sem_espera):
+        b = _app_novo(monkeypatch, _bancada())
+        real = b.client.resize_zone
+
+        def so_estica(i, zi, n):
+            if n < app_mod.TETO_LIMPEZA_CAUDA:
+                raise OpenRGBError("dispositivo nao respondeu")
+            real(i, zi, n)
+
+        b.client.resize_zone = so_estica
+        try:
+            assert b.connect() is True
+            teto = app_mod.TETO_LIMPEZA_CAUDA
+            assert b.renderer.canvas.n == teto + teto + 3
         finally:
             b.renderer.stop()
 
@@ -2243,7 +2290,7 @@ class TestConexaoCompleta:
         try:
             assert b.connect() is True
             assert [d.name for d in b.renderer.all_devices] == ["Mobo", "RAM"]
-            assert len(sem_espera.esperas) == 3
+            assert len(_esperas_da_descoberta(sem_espera)) == 3
         finally:
             b.renderer.stop()
 
@@ -2260,7 +2307,7 @@ class TestConexaoCompleta:
         b.client.load_devices = lista_mutavel
         try:
             assert b.connect() is True
-            assert 19.9 <= sum(sem_espera.esperas) <= 20.1
+            assert 19.9 <= sum(_esperas_da_descoberta(sem_espera)) <= 20.1
             assert len(chamadas) > 2
         finally:
             b.renderer.stop()
