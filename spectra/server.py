@@ -356,6 +356,8 @@ class Handler(BaseHTTPRequestHandler):
                     a.config["exclusive_mode"] = bool(b["enabled"])
                     a.save_config()
                 return self._json(a.enforce_exclusive(bool(b.get("forcar"))))
+            elif p == "/api/cooler/anel":
+                return self._json(a.set_cooler_anel(b["segue"]))
             elif p == "/api/teclado":
                 if "enabled" in b:
                     a.config["akko_keyboard"] = bool(b["enabled"])

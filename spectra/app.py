@@ -27,6 +27,7 @@ import numpy as np
 
 from . import __version__
 from . import effects as fx
+from .core import mystique
 from .core.protocol import OpenRGBClient, OpenRGBError
 from .engine import blend
 from .engine.canvas import device_key
@@ -2194,6 +2195,10 @@ class SpectraApp:
             self.save_config()
         return {"ok": True}
 
+    def set_cooler_anel(self, segue) -> dict:
+        """Liga ou desliga o anel do water cooler seguindo a cena."""
+        return mystique.definir_anel(bool(segue))
+
     def mostrar_janela(self) -> dict:
         """Mostra a janela do app, a pedido de uma segunda abertura."""
         cb = self.ao_mostrar_janela
@@ -2246,6 +2251,7 @@ class SpectraApp:
             "perfil_atual": self.config.get("perfil_atual"),
             "elevacao": self.elevacao,
             "teclado": (self.teclado.to_json() if self.teclado else None),
+            "cooler": mystique.estado(),
             "akko_keyboard": self.config.get("akko_keyboard", True),
             "motivo_conexao": self.motivo_conexao,
             "erro_conexao": self.erro_conexao,

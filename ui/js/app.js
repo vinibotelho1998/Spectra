@@ -1824,6 +1824,40 @@ function cartaoTeclado(st) {
   return el;
 }
 
+/** O anel do water cooler, que o OpenRGB nao alcanca. Quem fala com ele e o
+ *  servico do visor; a chave escolhe se a cor vem do conector ARGB, e entao
+ *  da cena, ou da temperatura da CPU. */
+function cartaoCooler(st) {
+  const c = st.cooler;
+  if (!c) return null;
+  const el = document.createElement("div");
+  el.className = "device" + (c.conectado && c.segue ? "" : " disabled");
+  const situacao = c.conectado ? `<span class="tag ok">servico do visor</span>`
+    : `<span class="tag err">${c.rodando ? "cooler desconectado" : "servico do visor parado"}</span>`;
+  el.innerHTML = `
+    <div class="device-head">
+      <span class="nm">${esc(c.name)}</span>
+      <span class="tag">Cooler</span>
+      ${situacao}
+      <span class="spacer"></span>
+    </div>
+    <p class="hint">Fora do OpenRGB. Com a chave ligada, o anel copia o conector
+     ARGB em que o cabo dele esta ligado e a cor vem da cena; acerte a contagem
+     desse conector em <b>Configurar LEDs</b>. Desligada, a cor acompanha a
+     temperatura da CPU.</p>`;
+  const sw = switchEl("Anel segue o Spectra", !!c.segue, async (v) => {
+    try {
+      const r = await API.post("/api/cooler/anel", { segue: v });
+      if (!r.ok) toast(r.error || "nao consegui trocar o anel", true);
+    } catch (e) {
+      toast(e.message, true);
+    }
+    refreshState();
+  });
+  el.querySelector(".device-head").appendChild(sw.querySelector(".switch"));
+  return el;
+}
+
 let devicesSig = null;
 function renderDevices(force) {
   const box = $("#deviceList");
@@ -1839,7 +1873,7 @@ function renderDevices(force) {
   // So remonta quando algo que aparece aqui mudou. O estado chega a cada
   // 1,5 s, e cada remontagem descartava o que estava sendo digitado.
   const sig = JSON.stringify([st.connecting, st.enabled_devices, st.elevacao,
-    st.teclado, st.akko_keyboard, st.reconnects, st.canvas && st.canvas.led_count,
+    st.teclado, st.akko_keyboard, st.cooler, st.reconnects, st.canvas && st.canvas.led_count,
     devs.map((d) => [d.key, d.led_count, d.direct_ok, d.has_direct,
                      d.zones.map((z) => z.leds_count)])]);
   if (!force && sig === devicesSig) return;
@@ -1884,6 +1918,9 @@ function renderDevices(force) {
 
   const tec = cartaoTeclado(st);
   if (tec) box.appendChild(tec);
+
+  const cooler = cartaoCooler(st);
+  if (cooler) box.appendChild(cooler);
 
   const enabled = st.enabled_devices || {};
   for (const d of devs) {

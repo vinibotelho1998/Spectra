@@ -10,8 +10,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fakes import bancada
 
+from spectra.core import mystique
 from spectra.engine.canvas import Canvas
 from spectra.engine.context import RenderContext
+
+
+@pytest.fixture(autouse=True)
+def cooler_isolado(tmp_path, monkeypatch):
+    """Arquivos do servico do visor numa pasta temporaria, em todo teste.
+
+    Sem isso a suite leria o estado do cooler de verdade da maquina e um
+    teste da chave do anel gravaria no controle real dele.
+    """
+    pasta = tmp_path / "deepcool"
+    monkeypatch.setattr(mystique, "caminho_estado", lambda: str(pasta / "status.json"))
+    monkeypatch.setattr(mystique, "CONTROLE", str(pasta / "control.json"))
+    return pasta
 
 
 @pytest.fixture

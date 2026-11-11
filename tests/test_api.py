@@ -1712,6 +1712,18 @@ class TestAssistenteDeLeds:
         assert spectra.set_pecas(chave, 0, []) == {"ok": True}
         assert spectra.config["pecas"] == {}
 
+    def test_cooler_aparece_no_estado_e_a_chave_grava_o_anel(
+            self, spectra, cooler_isolado):
+        import time as _t
+        assert spectra.state()["cooler"] is None
+        cooler_isolado.mkdir(parents=True)
+        (cooler_isolado / "status.json").write_text(
+            '{"connected": true, "led": "temperature", "updated": %d}' % _t.time(),
+            encoding="utf-8")
+        assert spectra.state()["cooler"]["segue"] is False
+        assert spectra.set_cooler_anel(True) == {"ok": True, "led": "motherboard"}
+        assert '"motherboard"' in (cooler_isolado / "control.json").read_text(encoding="utf-8")
+
     def test_divisao_em_pecas_invalida_e_recusada(self, spectra, chave):
         for ruim in (None, [0], [-1], ["x"], [300, 300], [1] * 65):
             assert spectra.set_pecas(chave, 0, ruim)["ok"] is False
@@ -2904,6 +2916,7 @@ ROTAS = [
     ("/api/profile/delete", {"name": "N"}, ("delete_profile", ("N",), {})),
     ("/api/favoritos", {"ids": ["a"]}, ("set_favoritos", (["a"],), {})),
     ("/api/inventario", {"itens": []}, ("set_inventario", ([],), {})),
+    ("/api/cooler/anel", {"segue": True}, ("set_cooler_anel", (True,), {})),
     ("/api/openrgb/exe", {"path": "p"}, ("set_openrgb_exe", ("p",), {})),
     ("/api/elevacao/reparar", {}, ("reparar_elevacao", (), {})),
     ("/api/reconnect", {}, ("connect", (), {})),
